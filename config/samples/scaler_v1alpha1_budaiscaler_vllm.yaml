@@ -1,0 +1,49 @@
+---
+# Example: BudScaler Strategy - GenAI-optimized scaling for vLLM
+# Optimized for LLM inference workloads with GPU awareness
+apiVersion: scaler.bud.studio/v1alpha1
+kind: BudAIScaler
+metadata:
+  name: vllm-server
+  namespace: ai-inference
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm-server
+  minReplicas: 1
+  maxReplicas: 10
+  scalingStrategy: BudScaler
+  metricsSources:
+    # Primary metric: GPU KV cache utilization
+    - metricSourceType: inferenceEngine
+      targetMetric: gpu_cache_usage_perc
+      targetValue: "70"
+      inferenceEngineConfig:
+        engineType: vllm
+        metricsPort: 8000
+        metricsPath: /metrics
+    # Secondary metric: Requests waiting in queue
+    - metricSourceType: inferenceEngine
+      targetMetric: num_requests_waiting
+      targetValue: "5"
+      inferenceEngineConfig:
+        engineType: vllm
+        metricsPort: 8000
+  gpuConfig:
+    enabled: true
+    gpuMemoryThreshold: 80
+    gpuComputeThreshold: 85
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60

@@ -1,0 +1,107 @@
+---
+# Example: BudScaler with All Features Enabled
+# GPU-aware, cost-aware, predictive scaling for GenAI workloads
+apiVersion: scaler.bud.studio/v1alpha1
+kind: BudAIScaler
+metadata:
+  name: llm-inference-full
+  namespace: ai-production
+  annotations:
+    # Custom scaling rates
+    scaler.bud.studio/scale-up-rate: "2.0"
+    scaler.bud.studio/scale-down-rate: "0.5"
+    scaler.bud.studio/tolerance: "10"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llm-inference-server
+  minReplicas: 2
+  maxReplicas: 50
+  scalingStrategy: BudScaler
+
+  # Multiple metric sources with different priorities
+  metricsSources:
+    # vLLM-specific metrics
+    - metricSourceType: inferenceEngine
+      targetMetric: gpu_cache_usage_perc
+      targetValue: "70"
+      inferenceEngineConfig:
+        engineType: vllm
+        metricsPort: 8000
+        metricsPath: /metrics
+
+    # Request queue depth
+    - metricSourceType: inferenceEngine
+      targetMetric: num_requests_waiting
+      targetValue: "10"
+      inferenceEngineConfig:
+        engineType: vllm
+        metricsPort: 8000
+
+    # Custom Prometheus query for request latency
+    - metricSourceType: prometheus
+      targetMetric: request_latency_p99
+      targetValue: "2000"  # 2 seconds
+      endpoint: http://prometheus.monitoring:9090
+      promQL: |
+        histogram_quantile(0.99,
+          sum(rate(vllm_request_latency_bucket{namespace="ai-production"}[5m]))
+          by (le, pod)
+        )
+
+  # GPU-aware scaling
+  gpuConfig:
+    enabled: true
+    gpuMemoryThreshold: 80
+    gpuComputeThreshold: 85
+    topologyAware: true
+    vgpuEnabled: false
+
+  # Cost-aware scaling
+  costConfig:
+    enabled: true
+    budgetPerHour: "100.00"  # $100/hour budget
+    preferSpotInstances: true
+    maxSpotPercentage: 70
+
+  # Predictive scaling
+  predictionConfig:
+    enabled: true
+    lookAheadMinutes: 30
+    scheduleHints:
+      # Scale up before business hours
+      - cronExpression: "0 8 * * 1-5"
+        expectedLoad: "high"
+        preScaleMinutes: 15
+      # Scale down for off-hours
+      - cronExpression: "0 20 * * 1-5"
+        expectedLoad: "low"
+        preScaleMinutes: 10
+      # Weekend pattern
+      - cronExpression: "0 0 * * 0,6"
+        expectedLoad: "minimal"
+        preScaleMinutes: 0
+
+  # Scaling behavior
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      selectPolicy: Max
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 30
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      selectPolicy: Min
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+        - type: Percent
+          value: 10
+          periodSeconds: 120

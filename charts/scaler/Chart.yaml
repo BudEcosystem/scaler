@@ -1,0 +1,30 @@
+apiVersion: v2
+name: scaler
+description: BudAIScaler - Kubernetes autoscaler for GenAI workloads with GPU-aware, cost-aware, and predictive scaling
+
+type: application
+
+version: 0.1.0
+
+appVersion: "0.1.0"
+
+keywords:
+  - autoscaler
+  - kubernetes
+  - genai
+  - gpu
+  - scaling
+  - llm
+  - vllm
+  - tgi
+
+home: https://github.com/BudEcosystem/scaler
+
+sources:
+  - https://github.com/BudEcosystem/scaler
+
+maintainers:
+  - name: Bud Ecosystem
+    url: https://github.com/BudEcosystem
+
+kubeVersion: ">=1.26.0-0"

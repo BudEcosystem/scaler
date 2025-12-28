@@ -1,0 +1,39 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named: {{ .Release.Name }}
+
+To verify the installation:
+
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "scaler.name" . }}
+
+To check the controller logs:
+
+  kubectl logs -n {{ .Release.Namespace }} -l control-plane=controller-manager -f
+
+To create a BudAIScaler resource, apply a manifest like:
+
+  apiVersion: scaler.bud.studio/v1alpha1
+  kind: BudAIScaler
+  metadata:
+    name: my-scaler
+  spec:
+    scaleTargetRef:
+      apiVersion: apps/v1
+      kind: Deployment
+      name: my-deployment
+    minReplicas: 1
+    maxReplicas: 10
+    scalingStrategy: BudScaler
+    metricsSources:
+      - metricSourceType: resource
+        targetMetric: cpu
+        targetValue: "80"
+
+For more information, visit:
+  https://github.com/BudEcosystem/scaler
+
+{{- if .Values.metrics.enabled }}
+
+Metrics are available at:
+  Service: {{ include "scaler.fullname" . }}-metrics:{{ .Values.metrics.service.port }}
+{{- end }}

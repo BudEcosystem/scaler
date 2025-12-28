@@ -1,0 +1,41 @@
+---
+# Example: BudScaler Strategy - Text Generation Inference (TGI) scaling
+# Optimized for Hugging Face TGI workloads
+apiVersion: scaler.bud.studio/v1alpha1
+kind: BudAIScaler
+metadata:
+  name: tgi-server
+  namespace: ai-inference
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: tgi-server
+  minReplicas: 1
+  maxReplicas: 8
+  scalingStrategy: BudScaler
+  metricsSources:
+    # Queue size - primary scaling signal
+    - metricSourceType: inferenceEngine
+      targetMetric: queue_depth
+      targetValue: "10"
+      inferenceEngineConfig:
+        engineType: tgi
+        metricsPort: 8080
+        metricsPath: /metrics
+    # Batch size utilization
+    - metricSourceType: inferenceEngine
+      targetMetric: batch_size
+      targetValue: "8"
+      inferenceEngineConfig:
+        engineType: tgi
+        metricsPort: 8080
+  gpuConfig:
+    enabled: true
+    gpuMemoryThreshold: 85
+    gpuComputeThreshold: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 45
+    scaleDown:
+      stabilizationWindowSeconds: 300

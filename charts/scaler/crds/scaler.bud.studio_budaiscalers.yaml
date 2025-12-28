@@ -1,0 +1,385 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: budaiscalers.scaler.bud.studio
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.1
+spec:
+  group: scaler.bud.studio
+  names:
+    kind: BudAIScaler
+    listKind: BudAIScalerList
+    plural: budaiscalers
+    shortNames:
+      - bas
+    singular: budaiscaler
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: MIN
+          type: integer
+          jsonPath: .spec.minReplicas
+        - name: MAX
+          type: integer
+          jsonPath: .spec.maxReplicas
+        - name: REPLICAS
+          type: integer
+          jsonPath: .status.actualScale
+        - name: STRATEGY
+          type: string
+          jsonPath: .spec.scalingStrategy
+        - name: READY
+          type: string
+          jsonPath: .status.conditions[?(@.type=='Ready')].status
+        - name: AGE
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: BudAIScaler is the Schema for the budaiscalers API.
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: BudAIScalerSpec defines the desired state of BudAIScaler.
+              type: object
+              required:
+                - maxReplicas
+                - metricsSources
+                - scaleTargetRef
+                - scalingStrategy
+              properties:
+                scaleTargetRef:
+                  description: ScaleTargetRef points to the target resource to scale.
+                  type: object
+                  properties:
+                    apiVersion:
+                      type: string
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                subTargetSelector:
+                  description: SubTargetSelector selects a sub-component within the target resource.
+                  type: object
+                  properties:
+                    roleName:
+                      type: string
+                minReplicas:
+                  description: MinReplicas is the minimum number of replicas.
+                  type: integer
+                  format: int32
+                  default: 1
+                  minimum: 0
+                maxReplicas:
+                  description: MaxReplicas is the maximum number of replicas.
+                  type: integer
+                  format: int32
+                  minimum: 1
+                scalingStrategy:
+                  description: ScalingStrategy defines the algorithm to use for scaling decisions.
+                  type: string
+                  enum:
+                    - HPA
+                    - KPA
+                    - BudScaler
+                  default: BudScaler
+                metricsSources:
+                  description: MetricsSources defines the metrics used for scaling decisions.
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required:
+                      - metricSourceType
+                      - targetMetric
+                      - targetValue
+                    properties:
+                      metricSourceType:
+                        description: MetricSourceType specifies how to fetch metrics.
+                        type: string
+                        enum:
+                          - pod
+                          - resource
+                          - custom
+                          - external
+                          - prometheus
+                          - inferenceEngine
+                      targetMetric:
+                        description: TargetMetric identifies the specific metric to monitor.
+                        type: string
+                      targetValue:
+                        description: TargetValue sets the desired threshold for the metric.
+                        type: string
+                      protocolType:
+                        description: ProtocolType for pod and external metric sources.
+                        type: string
+                        enum:
+                          - http
+                          - https
+                      endpoint:
+                        description: Endpoint for external or prometheus sources.
+                        type: string
+                      path:
+                        description: Path to the metrics endpoint.
+                        type: string
+                      port:
+                        description: Port for pod-level metrics.
+                        type: string
+                      promQL:
+                        description: PromQL query for prometheus source type.
+                        type: string
+                      headers:
+                        description: Headers to include in requests to external endpoints.
+                        type: object
+                        additionalProperties:
+                          type: string
+                      inferenceEngineConfig:
+                        description: InferenceEngineConfig for engine-specific metrics.
+                        type: object
+                        required:
+                          - engineType
+                        properties:
+                          engineType:
+                            type: string
+                            enum:
+                              - vllm
+                              - tgi
+                              - sglang
+                              - triton
+                          metricsPort:
+                            type: integer
+                            format: int32
+                            default: 8000
+                          metricsPath:
+                            type: string
+                            default: "/metrics"
+                gpuConfig:
+                  description: GPUConfig configures GPU-aware scaling behavior.
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                    gpuMemoryThreshold:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 100
+                    gpuComputeThreshold:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 100
+                    topologyAware:
+                      type: boolean
+                      default: false
+                    vgpuEnabled:
+                      type: boolean
+                      default: false
+                costConfig:
+                  description: CostConfig configures cost-aware scaling behavior.
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                    budgetPerHour:
+                      type: string
+                    preferSpotInstances:
+                      type: boolean
+                      default: false
+                    maxSpotPercentage:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 100
+                predictionConfig:
+                  description: PredictionConfig configures predictive scaling behavior.
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                    lookAheadMinutes:
+                      type: integer
+                      format: int32
+                      default: 30
+                    scheduleHints:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          cronExpression:
+                            type: string
+                          expectedLoad:
+                            type: string
+                          preScaleMinutes:
+                            type: integer
+                            format: int32
+                multiClusterConfig:
+                  description: MultiClusterConfig configures multi-cluster scaling.
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                    clusterSelector:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    federatedMetrics:
+                      type: boolean
+                      default: false
+                behavior:
+                  description: Behavior configures the scaling behavior.
+                  type: object
+                  properties:
+                    scaleUp:
+                      type: object
+                      properties:
+                        stabilizationWindowSeconds:
+                          type: integer
+                          format: int32
+                        selectPolicy:
+                          type: string
+                        policies:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              type:
+                                type: string
+                              value:
+                                type: integer
+                                format: int32
+                              periodSeconds:
+                                type: integer
+                                format: int32
+                    scaleDown:
+                      type: object
+                      properties:
+                        stabilizationWindowSeconds:
+                          type: integer
+                          format: int32
+                        selectPolicy:
+                          type: string
+                        policies:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              type:
+                                type: string
+                              value:
+                                type: integer
+                                format: int32
+                              periodSeconds:
+                                type: integer
+                                format: int32
+            status:
+              description: BudAIScalerStatus defines the observed state of BudAIScaler.
+              type: object
+              properties:
+                actualScale:
+                  description: ActualScale is the current number of replicas.
+                  type: integer
+                  format: int32
+                desiredScale:
+                  description: DesiredScale is the desired number of replicas.
+                  type: integer
+                  format: int32
+                lastScaleTime:
+                  description: LastScaleTime is the last time the scaler scaled.
+                  type: string
+                  format: date-time
+                conditions:
+                  description: Conditions represent the current state of the scaler.
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                scalingHistory:
+                  description: ScalingHistory contains recent scaling events.
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                      fromReplicas:
+                        type: integer
+                        format: int32
+                      toReplicas:
+                        type: integer
+                        format: int32
+                      triggerMetric:
+                        type: string
+                      triggerValue:
+                        type: string
+                      targetValue:
+                        type: string
+                      scalingStrategy:
+                        type: string
+                gpuStatus:
+                  description: GPUStatus contains GPU-related status information.
+                  type: object
+                  properties:
+                    totalGPUs:
+                      type: integer
+                      format: int32
+                    allocatedGPUs:
+                      type: integer
+                      format: int32
+                    averageMemoryUtilization:
+                      type: string
+                    averageComputeUtilization:
+                      type: string
+                costStatus:
+                  description: CostStatus contains cost-related status information.
+                  type: object
+                  properties:
+                    currentCostPerHour:
+                      type: string
+                    projectedMonthlyCost:
+                      type: string
+                    budgetUtilization:
+                      type: string
+                    lastCostUpdate:
+                      type: string
+                      format: date-time
+                predictionStatus:
+                  description: PredictionStatus contains prediction-related status information.
+                  type: object
+                  properties:
+                    nextPredictedLoad:
+                      type: string
+                    nextScaleTime:
+                      type: string
+                      format: date-time
+                    predictionConfidence:
+                      type: string
+      subresources:
+        status: {}
