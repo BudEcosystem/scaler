@@ -1,0 +1,45 @@
+# External dependencies (not needed for controller build)
+lib/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+bin/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+coverage.out
+*.cover
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+
+# Helm charts (not needed in container)
+charts/
+
+# E2E tests
+e2e/
+
+# Config (applied separately via kubectl)
+config/
+
+# Hack scripts
+hack/
