@@ -18,6 +18,15 @@ spec:
       targetValue: "70"
       path: /metrics
       port: "9000"
+  predictionConfig:
+    enabled: true
+    lookAheadMinutes: 5
+    # Use the cache usage metric for time-series prediction
+    predictionMetrics:
+      - "vllm:gpu_cache_usage_perc"
+    # Track seasonal patterns for the same metric
+    seasonalMetrics:
+      - "vllm:gpu_cache_usage_perc"
   behavior:
     scaleDown:
       stabilizationWindowSeconds: 60

@@ -86,13 +86,27 @@ ML-based prediction for proactive scaling:
 
 ```yaml
 spec:
+  metricsSources:
+    - targetMetric: "app:cache_usage"
+      targetValue: "70"
+    - targetMetric: "app:queue_depth"
+      targetValue: "50"
   predictionConfig:
     enabled: true
     lookAheadMinutes: 15
     historicalDataDays: 7
     enableLearning: true
     minConfidence: 0.7
+    # Specify which metrics to use for prediction (optional)
+    predictionMetrics:
+      - "app:cache_usage"
+    # Specify which metrics to track for seasonal patterns (optional)
+    seasonalMetrics:
+      - "app:cache_usage"
+      - "app:queue_depth"
 ```
+
+The prediction system is fully generic - you can use any metrics from your `metricsSources`. See [Prediction Algorithm](docs/prediction-algorithm.md) for details.
 
 ## Quick Start
 
@@ -298,6 +312,11 @@ metricsSources:
 
 ```yaml
 spec:
+  metricsSources:
+    - targetMetric: "vllm:gpu_cache_usage_perc"
+      targetValue: "70"
+    - targetMetric: "vllm:num_requests_waiting"
+      targetValue: "10"
   predictionConfig:
     enabled: true
     enableLearning: true
@@ -305,6 +324,13 @@ spec:
     historicalDataDays: 7
     minConfidence: 0.7
     maxPredictedReplicas: 20
+    # Use cache usage for time-series prediction
+    predictionMetrics:
+      - "vllm:gpu_cache_usage_perc"
+    # Track seasonal patterns for both metrics
+    seasonalMetrics:
+      - "vllm:gpu_cache_usage_perc"
+      - "vllm:num_requests_waiting"
 ```
 
 The learning system tracks:
@@ -366,6 +392,13 @@ metricsSources:
               │  (Deployment/StatefulSet)     │
               └───────────────────────────────┘
 ```
+
+## Documentation
+
+For detailed documentation, see the [docs](docs/) directory:
+
+- [Prediction Algorithm](docs/prediction-algorithm.md) - How predictive scaling works
+- [Scaling Decision Hierarchy](docs/scaling-hierarchy.md) - Priority order of scaling inputs
 
 ## Examples
 
@@ -456,6 +489,9 @@ scaler/
 │   ├── manager/                  # Controller deployment
 │   └── samples/                  # Example BudAIScalers
 ├── charts/scaler/                # Helm chart
+├── docs/                         # Documentation
+│   ├── prediction-algorithm.md   # Prediction system details
+│   └── scaling-hierarchy.md      # Scaling decision priority
 ├── e2e/                          # End-to-end tests
 │   ├── configs/                  # Test configurations
 │   ├── mocks/                    # Mock servers

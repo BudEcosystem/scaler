@@ -399,21 +399,19 @@ func (a *AutoScaler) getPredictionData(ctx context.Context, scaler *scalerv1alph
 		}
 	}
 
-	// Get the primary metric for prediction
 	if len(scaler.Spec.MetricsSources) == 0 {
 		return nil
 	}
 
-	primaryMetricSource := scaler.Spec.MetricsSources[0]
-	primaryMetric := primaryMetricSource.TargetMetric
-
-	// Parse target value from metric source
-	targetValue := 50.0 // Default fallback
-	if primaryMetricSource.TargetValue != "" {
-		if parsed, err := strconv.ParseFloat(primaryMetricSource.TargetValue, 64); err == nil {
-			targetValue = parsed
-		}
+	// Determine which metrics to use for prediction
+	predictionMetrics := a.getPredictionMetricNames(scaler)
+	if len(predictionMetrics) == 0 {
+		return nil
 	}
+
+	// Use the first prediction metric as primary for replica calculation
+	primaryMetric := predictionMetrics[0]
+	targetValue := a.getTargetValueForMetric(scaler, primaryMetric)
 
 	result := a.predictor.PredictReplicas(
 		ctx,
@@ -457,6 +455,43 @@ func (a *AutoScaler) GetAggregator() *aggregation.DefaultMetricAggregator {
 // GetCollector returns the metric collector.
 func (a *AutoScaler) GetCollector() *metrics.MultiSourceCollector {
 	return a.collector
+}
+
+// getPredictionMetricNames returns the metrics to use for prediction.
+// Uses configured PredictionMetrics if specified, otherwise defaults to first metric source.
+func (a *AutoScaler) getPredictionMetricNames(scaler *scalerv1alpha1.BudAIScaler) []string {
+	if scaler.Spec.PredictionConfig != nil && len(scaler.Spec.PredictionConfig.PredictionMetrics) > 0 {
+		return scaler.Spec.PredictionConfig.PredictionMetrics
+	}
+	// Default to first metric source
+	if len(scaler.Spec.MetricsSources) > 0 {
+		return []string{scaler.Spec.MetricsSources[0].TargetMetric}
+	}
+	return nil
+}
+
+// getSeasonalMetricNames returns the metrics to track for seasonal patterns.
+// Uses configured SeasonalMetrics if specified, otherwise defaults to prediction metrics.
+func (a *AutoScaler) getSeasonalMetricNames(scaler *scalerv1alpha1.BudAIScaler) []string {
+	if scaler.Spec.PredictionConfig != nil && len(scaler.Spec.PredictionConfig.SeasonalMetrics) > 0 {
+		return scaler.Spec.PredictionConfig.SeasonalMetrics
+	}
+	// Default to prediction metrics
+	return a.getPredictionMetricNames(scaler)
+}
+
+// getTargetValueForMetric looks up the target value for a metric name from metric sources.
+func (a *AutoScaler) getTargetValueForMetric(scaler *scalerv1alpha1.BudAIScaler, metricName string) float64 {
+	for _, source := range scaler.Spec.MetricsSources {
+		if source.TargetMetric == metricName {
+			if source.TargetValue != "" {
+				if parsed, err := strconv.ParseFloat(source.TargetValue, 64); err == nil {
+					return parsed
+				}
+			}
+		}
+	}
+	return 50.0 // Default fallback
 }
 
 // RecordScalingDecision records a scaling decision for history.
@@ -543,26 +578,17 @@ func (a *AutoScaler) recordLearningFeedback(
 		}
 	}
 
-	// Build LLM metrics
+	// Build LLM metrics from GPU metrics if available
 	llmMetrics := learning.LLMMetrics{}
 	if request.GPUMetrics != nil {
 		llmMetrics.GPUMemoryUtilization = request.GPUMetrics.MemoryUtilization
 		llmMetrics.GPUComputeUtilization = request.GPUMetrics.ComputeUtilization
 	}
 
-	// Extract LLM-specific metrics from snapshots
-	if snapshot, ok := metricSnapshots["vllm:gpu_cache_usage_perc"]; ok && snapshot != nil {
-		llmMetrics.GPUCacheUsage = snapshot.Average / 100.0 // Normalize to 0-1
-	}
-	if snapshot, ok := metricSnapshots["vllm:num_requests_waiting"]; ok && snapshot != nil {
-		llmMetrics.RequestsWaiting = snapshot.Average
-	}
-	if snapshot, ok := metricSnapshots["vllm:num_requests_running"]; ok && snapshot != nil {
-		llmMetrics.RequestsRunning = snapshot.Average
-	}
-	if snapshot, ok := metricSnapshots["vllm:avg_generation_throughput_toks_per_s"]; ok && snapshot != nil {
-		llmMetrics.TokenThroughput = snapshot.Average
-	}
+	// Note: LLMMetrics fields are populated from GPU metrics above.
+	// All other metrics are stored generically in metricValues map.
+	// The learning system uses metricValues for seasonal tracking based on
+	// configured SeasonalMetrics, not hardcoded metric names.
 
 	// Get predicted replicas if available
 	predictedReplicas := result.DesiredReplicas

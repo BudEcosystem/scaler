@@ -139,12 +139,10 @@ func (ls *LearningSystem) RecordScalingDecision(ctx context.Context, input Feedb
 	// Throttle: only record one prediction per interval to prevent buffer overflow
 	if !ls.lastRecordedAt.IsZero() && now.Sub(ls.lastRecordedAt) < ls.recordInterval {
 		// Still update seasonal profiles and pattern detector, just skip the pending verification
+		// All metrics from MetricSnapshots are tracked generically - no hardcoded metric names
 		for metric, value := range input.MetricSnapshots {
 			ls.seasonalProfiles.Update(metric, input.Timestamp, value)
 		}
-		ls.seasonalProfiles.Update("gpu_cache_usage", input.Timestamp, input.LLMMetrics.GPUCacheUsage)
-		ls.seasonalProfiles.Update("requests_waiting", input.Timestamp, input.LLMMetrics.RequestsWaiting)
-		ls.seasonalProfiles.Update("requests_running", input.Timestamp, input.LLMMetrics.RequestsRunning)
 		ls.patternDetector.UpdateHistory(input.MetricSnapshots, input.LLMMetrics)
 		return
 	}
@@ -176,16 +174,12 @@ func (ls *LearningSystem) RecordScalingDecision(ctx context.Context, input Feedb
 	})
 
 	// Update seasonal profiles with current metrics
+	// All metrics from MetricSnapshots are tracked generically - no hardcoded metric names
 	for metric, value := range input.MetricSnapshots {
 		ls.seasonalProfiles.Update(metric, input.Timestamp, value)
 	}
 
-	// Update LLM-specific metrics in seasonal profiles
-	ls.seasonalProfiles.Update("gpu_cache_usage", input.Timestamp, input.LLMMetrics.GPUCacheUsage)
-	ls.seasonalProfiles.Update("requests_waiting", input.Timestamp, input.LLMMetrics.RequestsWaiting)
-	ls.seasonalProfiles.Update("requests_running", input.Timestamp, input.LLMMetrics.RequestsRunning)
-
-	// Update pattern detector
+	// Update pattern detector with all available metrics
 	ls.patternDetector.UpdateHistory(input.MetricSnapshots, input.LLMMetrics)
 
 	ls.dirty = true

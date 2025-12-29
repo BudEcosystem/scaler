@@ -363,6 +363,22 @@ spec:
                     maximum: 60
                     minimum: 5
                     type: integer
+                  predictionMetrics:
+                    description: |-
+                      PredictionMetrics specifies which metrics from metricsSources to use for
+                      time-series prediction. Reference metrics by their targetMetric name.
+                      If not specified, defaults to the first metric in metricsSources.
+                    items:
+                      type: string
+                    type: array
+                  seasonalMetrics:
+                    description: |-
+                      SeasonalMetrics specifies which metrics from metricsSources to track for
+                      seasonal pattern learning (hourly/daily patterns). Reference metrics by
+                      their targetMetric name. If not specified, defaults to predictionMetrics.
+                    items:
+                      type: string
+                    type: array
                 type: object
               scaleTargetRef:
                 description: ScaleTargetRef points to the target resource to scale.

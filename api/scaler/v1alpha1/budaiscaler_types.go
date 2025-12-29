@@ -341,6 +341,18 @@ type PredictionConfig struct {
 	// +optional
 	// +kubebuilder:default=true
 	EnableLearning bool `json:"enableLearning,omitempty"`
+
+	// PredictionMetrics specifies which metrics from metricsSources to use for
+	// time-series prediction. Reference metrics by their targetMetric name.
+	// If not specified, defaults to the first metric in metricsSources.
+	// +optional
+	PredictionMetrics []string `json:"predictionMetrics,omitempty"`
+
+	// SeasonalMetrics specifies which metrics from metricsSources to track for
+	// seasonal pattern learning (hourly/daily patterns). Reference metrics by
+	// their targetMetric name. If not specified, defaults to predictionMetrics.
+	// +optional
+	SeasonalMetrics []string `json:"seasonalMetrics,omitempty"`
 }
 
 // ScheduleHint defines a known traffic pattern for scheduled scaling.
