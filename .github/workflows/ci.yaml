@@ -19,20 +19,20 @@ jobs:
         with:
           go-version: "1.22"
 
-      - name: Run go fmt
+      - name: Run go fmt check
         run: |
-          # Exclude lib/ folder which contains external dependencies
-          UNFORMATTED=$(find . -name '*.go' -not -path './lib/*' -not -path './vendor/*' | xargs gofmt -s -l)
-          if [ -n "$UNFORMATTED" ]; then
-            echo "Code is not formatted. Run 'go fmt ./...'"
-            echo "$UNFORMATTED"
+          # Check formatting on our code only (exclude lib/)
+          UNFMT=$(gofmt -s -l ./cmd ./pkg ./api)
+          if [ -n "$UNFMT" ]; then
+            echo "The following files are not formatted:"
+            echo "$UNFMT"
+            echo ""
+            echo "Run 'go fmt ./...' to fix"
             exit 1
           fi
 
       - name: Run go vet
-        run: |
-          # Only vet our own packages, exclude lib/
-          go vet $(go list ./... | grep -v '/lib/')
+        run: go vet ./cmd/... ./pkg/... ./api/...
 
   test:
     name: Test
@@ -47,17 +47,15 @@ jobs:
           go-version: "1.22"
 
       - name: Run tests
-        run: |
-          # Only test our own packages, exclude lib/
-          go test -v -race -coverprofile=coverage.out $(go list ./... | grep -v '/lib/')
+        run: go test -v -race -coverprofile=coverage.out ./cmd/... ./pkg/... ./api/...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
+        if: always()
         with:
           files: coverage.out
           fail_ci_if_error: false
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        continue-on-error: true
 
   build:
     name: Build
@@ -72,7 +70,7 @@ jobs:
           go-version: "1.22"
 
       - name: Build controller
-        run: go build -v ./cmd/controller/...
+        run: go build -v -o bin/controller ./cmd/controller
 
   helm-lint:
     name: Helm Lint
@@ -90,7 +88,7 @@ jobs:
         run: helm lint charts/scaler
 
       - name: Template Helm chart
-        run: helm template scaler charts/scaler
+        run: helm template scaler charts/scaler > /dev/null
 
   docker-build:
     name: Docker Build
@@ -108,5 +106,3 @@ jobs:
           context: .
           push: false
           tags: scaler:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

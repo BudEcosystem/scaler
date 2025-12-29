@@ -6,8 +6,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  HELM_REGISTRY: ghcr.io/${{ github.repository_owner }}/charts
 
 jobs:
   build-and-push-image:
@@ -17,9 +15,24 @@ jobs:
       contents: read
       packages: write
 
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Get release version
+        id: version
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Set image name (lowercase)
+        id: image
+        run: |
+          echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -34,31 +47,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:latest
 
   publish-helm-chart:
     name: Publish Helm Chart
     runs-on: ubuntu-latest
+    needs: build-and-push-image
     permissions:
       contents: write
       packages: write
@@ -72,6 +74,12 @@ jobs:
         with:
           version: v3.14.0
 
+      - name: Set registry names (lowercase)
+        id: registry
+        run: |
+          echo "helm_registry=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+          echo "image_name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
       - name: Log in to Helm Registry
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
@@ -79,7 +87,6 @@ jobs:
       - name: Get release version
         id: version
         run: |
-          # Extract version from release tag (remove 'v' prefix if present)
           VERSION="${{ github.event.release.tag_name }}"
           VERSION="${VERSION#v}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
@@ -91,11 +98,13 @@ jobs:
           echo "Updated Chart.yaml:"
           cat charts/scaler/Chart.yaml
 
-      - name: Update image tag in values.yaml
+      - name: Update image repository and tag in values.yaml
         run: |
-          # Update the tag field under image section
-          sed -i 's/^\(\s*tag:\s*\)".*"/\1"${{ steps.version.outputs.version }}"/' charts/scaler/values.yaml
-          echo "Updated values.yaml image section:"
+          # Update repository to match GHCR path
+          sed -i "s|repository:.*|repository: ${{ env.REGISTRY }}/${{ steps.registry.outputs.image_name }}|" charts/scaler/values.yaml
+          # Update tag - handle both empty and quoted values
+          sed -i "s/tag:.*/tag: \"${{ steps.version.outputs.version }}\"/" charts/scaler/values.yaml
+          echo "Updated values.yaml:"
           head -15 charts/scaler/values.yaml
 
       - name: Sync CRDs to Helm chart
@@ -103,8 +112,7 @@ jobs:
           cp config/crd/scaler.bud.studio_budaiscalers.yaml charts/scaler/crds/
 
       - name: Lint Helm chart
-        run: |
-          helm lint charts/scaler
+        run: helm lint charts/scaler
 
       - name: Package Helm chart
         run: |
@@ -113,7 +121,7 @@ jobs:
 
       - name: Push Helm chart to GHCR
         run: |
-          helm push scaler-${{ steps.version.outputs.version }}.tgz oci://${{ env.HELM_REGISTRY }}
+          helm push scaler-${{ steps.version.outputs.version }}.tgz oci://${{ env.REGISTRY }}/${{ steps.registry.outputs.helm_registry }}/charts
 
       - name: Upload Helm chart to release
         uses: softprops/action-gh-release@v2
@@ -128,6 +136,12 @@ jobs:
       contents: write
 
     steps:
+      - name: Set registry names (lowercase)
+        id: registry
+        run: |
+          echo "helm_registry=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
+          echo "image_name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
       - name: Get release version
         id: version
         run: |
@@ -148,7 +162,8 @@ jobs:
             ### Using Helm (OCI Registry)
 
             ```bash
-            helm install scaler oci://${{ env.HELM_REGISTRY }}/scaler --version ${{ steps.version.outputs.version }} \
+            helm install scaler oci://ghcr.io/${{ steps.registry.outputs.helm_registry }}/charts/scaler \
+              --version ${{ steps.version.outputs.version }} \
               --namespace scaler-system \
               --create-namespace
             ```
@@ -156,5 +171,5 @@ jobs:
             ### Using Docker Image
 
             ```bash
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            docker pull ghcr.io/${{ steps.registry.outputs.image_name }}:${{ steps.version.outputs.version }}
             ```
