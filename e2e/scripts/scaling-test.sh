@@ -19,21 +19,47 @@ source "$SCRIPT_DIR/common.sh"
 # Test configuration
 SCALER_NAME="llm-inference-scaler"
 DEPLOYMENT="llm-inference-sim"
-METRICS_SERVER="mock-vllm-metrics"
 
 set_metrics() {
     local gpu_cache=$1
     local running=$2
     local waiting=$3
-    local pod=$(kubectl get pod -l "app=$METRICS_SERVER" -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    kubectl exec "$pod" -n "$NAMESPACE" -- \
-        curl -s "localhost:8000/set?gpu_cache=${gpu_cache}&requests_running=${running}&requests_waiting=${waiting}" >/dev/null 2>&1 || true
+
+    # Get all simulator pods and update metrics on each one's sidecar
+    local pods=$(kubectl get pod -l "app=$DEPLOYMENT" -n "$NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+    if [ -z "$pods" ]; then
+        log_error "Could not find simulator pods"
+        return 1
+    fi
+
+    local failed=0
+    for pod in $pods; do
+        # Use Python's urllib to update metrics on the sidecar (port 9000)
+        local result=$(kubectl exec "$pod" -n "$NAMESPACE" -c metrics-sidecar -- python3 -c "
+import urllib.request
+try:
+    url = 'http://localhost:9000/set?gpu_cache=${gpu_cache}&requests_running=${running}&requests_waiting=${waiting}'
+    response = urllib.request.urlopen(url, timeout=5)
+    print(response.read().decode())
+except Exception as e:
+    print(f'ERROR: {e}')
+    exit(1)
+" 2>&1)
+        if [[ "$result" == ERROR* ]]; then
+            log_error "Failed to set metrics on $pod: $result"
+            failed=1
+        fi
+    done
+
+    if [ $failed -eq 1 ]; then
+        return 1
+    fi
+    log_info "Metrics set: gpu_cache=$gpu_cache, running=$running, waiting=$waiting"
 }
 
 do_cleanup() {
     log_step "Cleaning up scaling test resources"
     kubectl delete -f "$CONFIGS_DIR/basic-test.yaml" --ignore-not-found -n "$NAMESPACE" 2>/dev/null || true
-    kubectl delete -f "$MOCKS_DIR/metrics-server.yaml" --ignore-not-found -n "$NAMESPACE" 2>/dev/null || true
     kubectl delete -f "$MOCKS_DIR/simulator.yaml" --ignore-not-found -n "$NAMESPACE" 2>/dev/null || true
 }
 
@@ -41,11 +67,7 @@ setup() {
     log_step "Setting up test environment"
     setup_namespace
 
-    log_info "Deploying mock metrics server..."
-    apply_config "$MOCKS_DIR/metrics-server.yaml"
-    wait_for_pod "app=$METRICS_SERVER"
-
-    log_info "Deploying simulator deployment..."
+    log_info "Deploying simulator with metrics sidecar..."
     apply_config "$MOCKS_DIR/simulator.yaml"
     wait_for_pod "app=$DEPLOYMENT"
 
@@ -85,15 +107,30 @@ test_scale_up() {
 test_scale_down() {
     log_step "Testing SCALE-DOWN"
 
-    log_info "Setting low load metrics (GPU cache: 20%, Running: 2, Waiting: 0)..."
+    # Wait for all pods to be ready after scale-up
+    log_info "Waiting for all pods to be ready..."
+    local ready_pods=0
+    local expected_pods=$(get_replicas "$SCALER_NAME")
+    for i in $(seq 1 12); do
+        ready_pods=$(kubectl get pods -l "app=$DEPLOYMENT" -n "$NAMESPACE" --field-selector=status.phase=Running -o name 2>/dev/null | wc -l)
+        if [ "$ready_pods" -ge "$expected_pods" ]; then
+            break
+        fi
+        sleep 5
+    done
+    log_info "Found $ready_pods running pods"
+
+    log_info "Setting low load metrics on ALL pods (GPU cache: 20%, Running: 2, Waiting: 0)..."
     set_metrics 20 2 0
 
-    log_info "Waiting for scale-down response (90s)..."
-    for i in $(seq 1 6); do
+    log_info "Waiting for scale-down response (120s)..."
+    for i in $(seq 1 8); do
         sleep 15
         local desired=$(get_desired_replicas "$SCALER_NAME")
         local actual=$(get_replicas "$SCALER_NAME")
         echo -e "  ${BLUE}[$((i*15))s]${NC} Desired: $desired, Actual: $actual"
+        # Update metrics on any new pods that might have been created
+        set_metrics 20 2 0 2>/dev/null || true
     done
 
     local final_desired=$(get_desired_replicas "$SCALER_NAME")

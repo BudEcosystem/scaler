@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"time"
 
+	"k8s.io/klog/v2"
+
 	scalerv1alpha1 "github.com/BudEcosystem/scaler/api/scaler/v1alpha1"
 )
 
@@ -55,6 +57,8 @@ func (f *ExternalMetricFetcherImpl) FetchExternalMetrics(ctx context.Context, so
 		return 0, fmt.Errorf("failed to build URL: %w", err)
 	}
 
+	klog.V(2).InfoS("Fetching external metrics", "url", queryURL, "metric", source.TargetMetric)
+
 	// Create request with context
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, queryURL, nil)
 	if err != nil {
@@ -81,7 +85,14 @@ func (f *ExternalMetricFetcherImpl) FetchExternalMetrics(ctx context.Context, so
 	}
 
 	// Parse the response
-	return f.parseResponse(resp.Body, source.TargetMetric)
+	value, err := f.parseResponse(resp.Body, source.TargetMetric)
+	if err != nil {
+		klog.V(2).InfoS("Failed to parse external metrics response", "url", queryURL, "metric", source.TargetMetric, "error", err)
+		return 0, err
+	}
+
+	klog.V(2).InfoS("Successfully fetched external metric", "url", queryURL, "metric", source.TargetMetric, "value", value)
+	return value, nil
 }
 
 // SourceType returns the metric source type.
@@ -169,7 +180,9 @@ func (f *ExternalMetricFetcherImpl) parseResponse(body io.Reader, metricName str
 		}
 	}
 
-	return 0, fmt.Errorf("could not extract metric value from response")
+	// If structured response didn't have the expected fields, try generic JSON parsing
+	// This handles cases where the response is a flat map like {"metric_name": value}
+	return f.parseGenericJSON(data, metricName)
 }
 
 // parseGenericJSON attempts to parse a generic JSON response.
@@ -179,9 +192,12 @@ func (f *ExternalMetricFetcherImpl) parseGenericJSON(data []byte, metricName str
 		return 0, fmt.Errorf("failed to parse JSON response: %w", err)
 	}
 
+	klog.V(4).InfoS("Parsing generic JSON", "metricName", metricName, "keys", fmt.Sprintf("%v", getKeys(jsonData)))
+
 	// If metric name is specified, look for it in the response
 	if metricName != "" {
 		if value, ok := jsonData[metricName]; ok {
+			klog.V(4).InfoS("Found metric in JSON", "metricName", metricName, "value", value)
 			return f.toFloat64(value)
 		}
 
@@ -216,6 +232,15 @@ func (f *ExternalMetricFetcherImpl) findNestedValue(data map[string]interface{},
 		}
 	}
 	return 0, fmt.Errorf("key %s not found", key)
+}
+
+// getKeys returns the keys of a map.
+func getKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // toFloat64 converts various types to float64.

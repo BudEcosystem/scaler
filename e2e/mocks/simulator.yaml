@@ -51,6 +51,95 @@ spec:
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 5
+        # Metrics sidecar - serves controllable metrics for E2E testing
+        - name: metrics-sidecar
+          image: python:3.11-slim
+          ports:
+            - containerPort: 9000
+              name: metrics
+          command:
+            - python3
+            - -c
+            - |
+              import http.server
+              import threading
+              import os
+
+              class MetricsState:
+                  gpu_cache_usage = float(os.environ.get('INITIAL_GPU_CACHE', '85'))
+                  num_requests_running = int(os.environ.get('INITIAL_RUNNING', '5'))
+                  num_requests_waiting = int(os.environ.get('INITIAL_WAITING', '10'))
+                  lock = threading.Lock()
+
+              class MetricsHandler(http.server.BaseHTTPRequestHandler):
+                  def log_message(self, format, *args):
+                      pass
+
+                  def do_GET(self):
+                      if self.path == '/metrics' or self.path.startswith('/metrics?'):
+                          with MetricsState.lock:
+                              metrics = f'''# HELP vllm_gpu_cache_usage_perc GPU KV-cache usage
+              # TYPE vllm_gpu_cache_usage_perc gauge
+              vllm:gpu_cache_usage_perc{{model_name="test-model"}} {MetricsState.gpu_cache_usage}
+              # HELP vllm_num_requests_running Number of running requests
+              # TYPE vllm_num_requests_running gauge
+              vllm:num_requests_running{{model_name="test-model"}} {MetricsState.num_requests_running}
+              # HELP vllm_num_requests_waiting Number of waiting requests
+              # TYPE vllm_num_requests_waiting gauge
+              vllm:num_requests_waiting{{model_name="test-model"}} {MetricsState.num_requests_waiting}
+              '''
+                          self.send_response(200)
+                          self.send_header('Content-Type', 'text/plain')
+                          self.end_headers()
+                          self.wfile.write(metrics.encode())
+                      elif self.path == '/health' or self.path == '/ready':
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(b'OK')
+                      elif self.path.startswith('/set'):
+                          try:
+                              params = {}
+                              if '?' in self.path:
+                                  query = self.path.split('?')[1]
+                                  for param in query.split('&'):
+                                      if '=' in param:
+                                          k, v = param.split('=', 1)
+                                          params[k] = v
+                              with MetricsState.lock:
+                                  if 'gpu_cache' in params:
+                                      MetricsState.gpu_cache_usage = float(params['gpu_cache'])
+                                  if 'requests_running' in params:
+                                      MetricsState.num_requests_running = int(params['requests_running'])
+                                  if 'requests_waiting' in params:
+                                      MetricsState.num_requests_waiting = int(params['requests_waiting'])
+                              self.send_response(200)
+                              self.end_headers()
+                              self.wfile.write(b'OK')
+                          except Exception as e:
+                              self.send_response(500)
+                              self.end_headers()
+                              self.wfile.write(str(e).encode())
+                      else:
+                          self.send_response(404)
+                          self.end_headers()
+
+              server = http.server.HTTPServer(('0.0.0.0', 9000), MetricsHandler)
+              print('Metrics sidecar listening on port 9000')
+              server.serve_forever()
+          env:
+            - name: INITIAL_GPU_CACHE
+              value: "85"
+            - name: INITIAL_RUNNING
+              value: "5"
+            - name: INITIAL_WAITING
+              value: "10"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service

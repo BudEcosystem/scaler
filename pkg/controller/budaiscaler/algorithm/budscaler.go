@@ -64,6 +64,12 @@ func (a *BudScalerAlgorithm) GetAlgorithmType() scalerv1alpha1.ScalingStrategyTy
 }
 
 // ComputeRecommendation calculates the recommended replica count.
+// Priority order (highest to lowest):
+// 1. Cost constraints - Hard ceiling (always wins)
+// 2. Max replicas - Hard ceiling
+// 3. Schedule hint - Dynamic floor (during active period)
+// 4. Min replicas - Static floor
+// 5. Metrics/GPU/Prediction - Calculate desired
 func (a *BudScalerAlgorithm) ComputeRecommendation(ctx context.Context, request ScalingRequest) (*ScalingRecommendation, error) {
 	if request.Scaler == nil {
 		return nil, fmt.Errorf("scaler is required")
@@ -86,35 +92,63 @@ func (a *BudScalerAlgorithm) ComputeRecommendation(ctx context.Context, request 
 		Confidence:      1.0,
 	}
 
-	// Calculate metric-based recommendation
+	// Step 1: Calculate metric-based recommendation
 	metricRec, err := a.calculateMetricBasedRecommendation(request, sctx)
 	if err != nil {
 		klog.V(4).InfoS("Failed to calculate metric-based recommendation", "error", err)
 		metricRec = request.CurrentReplicas
 	}
 
-	// Calculate GPU-based recommendation if enabled
+	// Step 2: Calculate GPU-based recommendation if enabled (can only increase)
 	gpuRec := metricRec
 	if request.Scaler.Spec.GPUConfig != nil && request.Scaler.Spec.GPUConfig.Enabled && request.GPUMetrics != nil {
-		gpuRec = a.calculateGPUBasedRecommendation(request, sctx)
+		gpuCalc := a.calculateGPUBasedRecommendation(request, sctx)
+		// GPU can only increase, not decrease
+		if gpuCalc > metricRec {
+			gpuRec = gpuCalc
+		}
 	}
 
-	// Calculate cost-constrained recommendation if enabled
-	costRec := gpuRec
+	// Step 3: Apply prediction adjustment if enabled (but NOT for schedule hints)
+	predRec := gpuRec
+	if request.Scaler.Spec.PredictionConfig != nil &&
+		request.Scaler.Spec.PredictionConfig.Enabled &&
+		request.PredictionData != nil &&
+		!request.PredictionData.IsScheduleHint {
+		// Only apply ML prediction blending for non-schedule-hint predictions
+		predRec = a.applyPredictionAdjustment(gpuRec, request)
+	}
+
+	// Step 4: Apply schedule hint as FLOOR (can only increase, not decrease)
+	floorRec := predRec
+	if request.PredictionData != nil && request.PredictionData.IsScheduleHint {
+		scheduleFloor := request.PredictionData.PredictedReplicas
+		if predRec < scheduleFloor {
+			floorRec = scheduleFloor
+			klog.V(4).InfoS("Schedule hint floor applied",
+				"metricRec", metricRec,
+				"predRec", predRec,
+				"scheduleFloor", scheduleFloor,
+				"floorRec", floorRec,
+				"hint", request.PredictionData.ScheduleHintName)
+		}
+	}
+
+	// Step 5: Apply cost constraints (CEILING - always wins, highest priority)
+	costRec := floorRec
 	if request.Scaler.Spec.CostConfig != nil && request.CostMetrics != nil {
-		costRec = a.applyCostConstraints(gpuRec, request)
+		costRec = a.applyCostConstraints(floorRec, request)
+		if costRec < floorRec {
+			klog.V(4).InfoS("Cost constraint capped replicas",
+				"beforeCost", floorRec,
+				"afterCost", costRec)
+		}
 	}
 
-	// Apply prediction adjustment if enabled
-	predRec := costRec
-	if request.Scaler.Spec.PredictionConfig != nil && request.Scaler.Spec.PredictionConfig.Enabled && request.PredictionData != nil {
-		predRec = a.applyPredictionAdjustment(costRec, request)
-	}
+	// Step 6: Apply min/max constraints
+	rec.DesiredReplicas = a.applyConstraints(costRec, sctx.GetMinReplicas(), sctx.GetMaxReplicas())
 
-	// Apply min/max constraints
-	rec.DesiredReplicas = a.applyConstraints(predRec, sctx.GetMinReplicas(), sctx.GetMaxReplicas())
-
-	// Apply stabilization
+	// Step 7: Apply stabilization
 	rec.DesiredReplicas = a.applyStabilization(rec.DesiredReplicas, request, sctx)
 
 	// Determine scale direction and reason
@@ -419,6 +453,13 @@ func (a *BudScalerAlgorithm) setRecommendationDetails(rec *ScalingRecommendation
 			request.CurrentReplicas, rec.DesiredReplicas)
 	} else {
 		rec.Reason = fmt.Sprintf("BudScaler: No scaling needed at %d replicas", request.CurrentReplicas)
+	}
+
+	// Add schedule hint info if active
+	if request.PredictionData != nil && request.PredictionData.IsScheduleHint {
+		rec.Reason += fmt.Sprintf(" [schedule hint '%s' floor: %d]",
+			request.PredictionData.ScheduleHintName,
+			request.PredictionData.PredictedReplicas)
 	}
 
 	// Add GPU info if available

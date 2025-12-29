@@ -202,6 +202,11 @@ type PredictionData struct {
 	Reason string
 	// Source indicates the prediction source.
 	Source PredictionSource
+	// IsScheduleHint indicates if this prediction comes from a schedule hint.
+	// Schedule hints act as a minimum floor - the system can scale higher but not lower.
+	IsScheduleHint bool
+	// ScheduleHintName is the name of the active schedule hint (if any).
+	ScheduleHintName string
 }
 
 // PredictionSource indicates what the prediction is based on.

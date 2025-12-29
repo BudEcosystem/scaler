@@ -40,6 +40,20 @@ data:
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b'OK')
+            elif self.path == '/json' or self.path.startswith('/json?'):
+                # JSON format for external metric fetcher
+                # Return values on 0-100 scale to match targetValue in scaler config
+                import json
+                with MetricsState.lock:
+                    data = {
+                        'vllm:gpu_cache_usage_perc': MetricsState.gpu_cache_usage,
+                        'vllm:num_requests_running': MetricsState.num_requests_running,
+                        'vllm:num_requests_waiting': MetricsState.num_requests_waiting,
+                    }
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(data).encode())
             elif self.path.startswith('/set'):
                 try:
                     params = {}

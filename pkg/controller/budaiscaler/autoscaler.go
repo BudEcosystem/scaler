@@ -363,6 +363,7 @@ func (a *AutoScaler) loadScheduleHints(scaler *scalerv1alpha1.BudAIScaler) {
 
 // getScheduleHintData returns prediction data based only on schedule hints.
 // Used when prediction is disabled but schedule hints are defined.
+// Schedule hints act as a minimum floor - scaling can go higher but not lower.
 func (a *AutoScaler) getScheduleHintData(scaler *scalerv1alpha1.BudAIScaler) *types.PredictionData {
 	activeHint := a.predictor.GetActiveScheduleHint(time.Now())
 	if activeHint == nil {
@@ -378,6 +379,9 @@ func (a *AutoScaler) getScheduleHintData(scaler *scalerv1alpha1.BudAIScaler) *ty
 		PredictedReplicas: activeHint.TargetReplicas,
 		Confidence:        1.0, // Schedule hints have 100% confidence
 		Reason:            fmt.Sprintf("schedule hint: %s", activeHint.Name),
+		Source:            types.PredictionSourceSchedule,
+		IsScheduleHint:    true,
+		ScheduleHintName:  activeHint.Name,
 	}
 }
 
@@ -420,18 +424,29 @@ func (a *AutoScaler) getPredictionData(ctx context.Context, scaler *scalerv1alph
 		scaler.Spec.MaxReplicas,
 	)
 
-	// Check if there's an active schedule hint
-	if result.ScheduleHint != nil {
-		klog.InfoS("Active schedule hint",
-			"name", result.ScheduleHint.Name,
-			"targetReplicas", result.ScheduleHint.TargetReplicas)
-	}
-
-	return &types.PredictionData{
+	predData := &types.PredictionData{
 		PredictedReplicas: result.RecommendedReplicas,
 		Confidence:        result.Confidence,
 		Reason:            result.Reason,
+		Source:            types.PredictionSourceTimeSeries,
 	}
+
+	// Check if there's an active schedule hint - schedule hints act as floor
+	if result.ScheduleHint != nil {
+		klog.InfoS("Active schedule hint (with prediction)",
+			"scaler", scaler.Name,
+			"hint", result.ScheduleHint.Name,
+			"hintReplicas", result.ScheduleHint.TargetReplicas,
+			"predictedReplicas", result.RecommendedReplicas)
+
+		predData.IsScheduleHint = true
+		predData.ScheduleHintName = result.ScheduleHint.Name
+		predData.Source = types.PredictionSourceSchedule
+		// Store the schedule hint target - algorithm will use this as floor
+		predData.PredictedReplicas = result.ScheduleHint.TargetReplicas
+	}
+
+	return predData
 }
 
 // GetAggregator returns the metric aggregator.

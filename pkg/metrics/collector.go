@@ -125,6 +125,7 @@ func (c *DefaultMetricCollector) CollectMetrics(ctx context.Context, pods []core
 
 // collectExternalMetrics collects metrics from external sources.
 func (c *DefaultMetricCollector) collectExternalMetrics(ctx context.Context, pods []corev1.Pod, source scalerv1alpha1.MetricSource) (*types.MetricSnapshot, error) {
+	klog.V(4).InfoS("Collecting external metrics", "metric", source.TargetMetric, "endpoint", source.Endpoint, "sourceType", source.MetricSourceType)
 	fetcher, err := c.factory.ForExternal(source)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get external metric fetcher: %w", err)
