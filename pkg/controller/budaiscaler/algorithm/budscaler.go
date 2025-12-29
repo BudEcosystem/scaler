@@ -224,38 +224,43 @@ func (a *BudScalerAlgorithm) calculateGPUBasedRecommendation(request ScalingRequ
 		return request.CurrentReplicas
 	}
 
-	// Calculate composite GPU score
-	memoryScore := 0.0
-	computeScore := 0.0
+	// Calculate utilization ratios (how much above/below threshold)
+	memoryRatio := 1.0
+	computeRatio := 1.0
 
-	// Memory utilization score
+	// Memory utilization ratio: util / threshold
+	// If util=87.5% and threshold=70%, ratio = 1.25 (need more replicas)
 	if gpuConfig.GPUMemoryThreshold != nil && *gpuConfig.GPUMemoryThreshold > 0 {
-		memoryScore = gpu.MemoryUtilization / float64(*gpuConfig.GPUMemoryThreshold) * 100
+		memoryRatio = gpu.MemoryUtilization / float64(*gpuConfig.GPUMemoryThreshold)
 	}
 
-	// Compute utilization score
+	// Compute utilization ratio: util / threshold
+	// If util=90% and threshold=80%, ratio = 1.125 (need more replicas)
 	if gpuConfig.GPUComputeThreshold != nil && *gpuConfig.GPUComputeThreshold > 0 {
-		computeScore = gpu.ComputeUtilization / float64(*gpuConfig.GPUComputeThreshold) * 100
+		computeRatio = gpu.ComputeUtilization / float64(*gpuConfig.GPUComputeThreshold)
 	}
 
-	// Weighted composite score
-	compositeScore := memoryScore*GPUMemoryWeight + computeScore*GPUComputeWeight
+	// Take the max of the two ratios (scale based on most overloaded dimension)
+	ratio := math.Max(memoryRatio, computeRatio)
 
-	// Calculate desired replicas based on GPU score
-	if compositeScore > 0 {
-		ratio := compositeScore / 100 // Normalize to 0-1+
-		desiredFloat := float64(request.CurrentReplicas) * ratio
-		desired := int32(math.Ceil(desiredFloat))
+	klog.V(4).InfoS("GPU recommendation calculation",
+		"memoryUtil", gpu.MemoryUtilization,
+		"computeUtil", gpu.ComputeUtilization,
+		"memoryRatio", memoryRatio,
+		"computeRatio", computeRatio,
+		"ratio", ratio,
+		"currentReplicas", request.CurrentReplicas)
 
-		// Apply constraints
-		if desired < 1 {
-			desired = 1
-		}
+	// Calculate desired replicas
+	desiredFloat := float64(request.CurrentReplicas) * ratio
+	desired := int32(math.Ceil(desiredFloat))
 
-		return desired
+	// Apply constraints
+	if desired < 1 {
+		desired = 1
 	}
 
-	return request.CurrentReplicas
+	return desired
 }
 
 // applyCostConstraints applies cost budget constraints.
@@ -265,6 +270,23 @@ func (a *BudScalerAlgorithm) applyCostConstraints(desired int32, request Scaling
 
 	if costConfig == nil || costMetrics == nil {
 		return desired
+	}
+
+	// Check if currently over budget - need to scale down
+	if costMetrics.CurrentCostPerHour > costMetrics.BudgetPerHour && costMetrics.PerReplicaCostPerHour > 0 {
+		// Calculate max replicas within budget
+		maxReplicasInBudget := int32(costMetrics.BudgetPerHour / costMetrics.PerReplicaCostPerHour)
+		if maxReplicasInBudget < 1 {
+			maxReplicasInBudget = 1 // At minimum, keep 1 replica
+		}
+		if maxReplicasInBudget < desired {
+			klog.InfoS("Over budget, constraining to max affordable replicas",
+				"currentCost", costMetrics.CurrentCostPerHour,
+				"budget", costMetrics.BudgetPerHour,
+				"currentReplicas", request.CurrentReplicas,
+				"maxAffordable", maxReplicasInBudget)
+			return maxReplicasInBudget
+		}
 	}
 
 	// Check if scaling up would exceed budget
@@ -279,7 +301,7 @@ func (a *BudScalerAlgorithm) applyCostConstraints(desired int32, request Scaling
 				maxAdditional := int32(availableBudget / costMetrics.PerReplicaCostPerHour)
 				constrainedDesired := request.CurrentReplicas + maxAdditional
 				if constrainedDesired < desired {
-					klog.V(4).InfoS("Constraining scale up due to budget",
+					klog.InfoS("Constraining scale up due to budget",
 						"originalDesired", desired,
 						"constrainedDesired", constrainedDesired,
 						"budget", costMetrics.BudgetPerHour)
@@ -287,7 +309,7 @@ func (a *BudScalerAlgorithm) applyCostConstraints(desired int32, request Scaling
 				}
 			} else {
 				// No budget for additional replicas
-				klog.V(4).InfoS("No budget for additional replicas", "desired", desired)
+				klog.InfoS("No budget for additional replicas", "desired", desired)
 				return request.CurrentReplicas
 			}
 		}

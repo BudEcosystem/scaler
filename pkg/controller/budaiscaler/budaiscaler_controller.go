@@ -22,7 +22,6 @@ import (
 	"time"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,9 +32,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	scalerv1alpha1 "github.com/BudEcosystem/scaler/api/scaler/v1alpha1"
-	"github.com/BudEcosystem/scaler/pkg/algorithm"
+	"github.com/BudEcosystem/scaler/pkg/controller/budaiscaler/algorithm"
 	"github.com/BudEcosystem/scaler/pkg/metrics"
 )
 
@@ -317,6 +317,28 @@ func (r *BudAIScalerReconciler) reconcileCustomScaler(ctx context.Context, scale
 			"reason", result.Recommendation.Reason)
 	}
 
+	// Update learning status if learning is enabled
+	if scaler.Spec.PredictionConfig != nil && scaler.Spec.PredictionConfig.EnableLearning {
+		learningStatus := r.autoScaler.GetLearningStatus(ctx, scaler)
+		if learningStatus != nil {
+			scaler.Status.LearningStatus = &scalerv1alpha1.LearningStatus{
+				DataPointsCollected:  int32(learningStatus.DataPointsCollected),
+				OverallAccuracy:      fmt.Sprintf("%.1f%%", learningStatus.OverallAccuracy),
+				DirectionAccuracy:    fmt.Sprintf("%.1f%%", learningStatus.OverallAccuracy), // Direction accuracy
+				RecentMAPE:           fmt.Sprintf("%.2f%%", learningStatus.OverallMAPE),
+				RecentMAE:            fmt.Sprintf("%.2f", learningStatus.OverallMAE),
+				SeasonalDataComplete: learningStatus.SeasonalDataComplete,
+				DetectedPattern:      learningStatus.CurrentPattern,
+				PatternConfidence:    fmt.Sprintf("%.2f", learningStatus.PatternConfidence),
+				CalibrationNeeded:    learningStatus.CalibrationNeeded,
+				ConfigMapName:        learningStatus.ConfigMapName,
+			}
+			logger.V(1).Info("Updated learning status",
+				"dataPoints", learningStatus.DataPointsCollected,
+				"pattern", learningStatus.CurrentPattern)
+		}
+	}
+
 	// Update status
 	if err := r.Status().Update(ctx, scaler); err != nil {
 		klog.V(4).InfoS("Failed to update status", "error", err)
@@ -386,6 +408,6 @@ func (r *BudAIScalerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&scalerv1alpha1.BudAIScaler{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
-		Watches(&corev1.Pod{}, nil). // Watch pods for metrics
+		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Complete(r)
 }

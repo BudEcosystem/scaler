@@ -1,0 +1,50 @@
+---
+# Test Prediction-based scaling
+# Uses schedule hints and predictive scaling
+apiVersion: scaler.bud.studio/v1alpha1
+kind: BudAIScaler
+metadata:
+  name: prediction-scaler
+  namespace: llm-test
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llm-inference-sim
+  minReplicas: 1
+  maxReplicas: 5
+  scalingStrategy: BudScaler
+  metricsSources:
+    - metricSourceType: pod
+      targetMetric: "vllm:gpu_cache_usage_perc"
+      targetValue: "0.7"
+      path: /metrics
+      port: "8000"
+  # Prediction configuration
+  predictionConfig:
+    enabled: true
+    lookAheadMinutes: 15          # Predict 15 minutes ahead
+    historicalDataDays: 7         # Use 7 days of history
+    enableLearning: true          # Learn from past decisions
+  # Schedule hints (top-level, work independently of prediction)
+  scheduleHints:
+    # Scale up for weekday mornings (9 AM - 11 AM)
+    - name: weekday-morning-rush
+      cronExpression: "0 9 * * 1-5"
+      targetReplicas: 4
+      duration: 2h
+    # Scale up for afternoon peak (2 PM - 5 PM)
+    - name: afternoon-peak
+      cronExpression: "0 14 * * 1-5"
+      targetReplicas: 5
+      duration: 3h
+    # Scale down for night (11 PM - 6 AM)
+    - name: night-low
+      cronExpression: "0 23 * * *"
+      targetReplicas: 1
+      duration: 7h
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30

@@ -1,0 +1,33 @@
+---
+# Test Cost-constrained scaling
+# Limits scaling based on hourly/daily budget
+apiVersion: scaler.bud.studio/v1alpha1
+kind: BudAIScaler
+metadata:
+  name: cost-aware-scaler
+  namespace: llm-test
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llm-inference-sim
+  minReplicas: 1
+  maxReplicas: 10   # Higher max to test budget limiting
+  scalingStrategy: BudScaler
+  metricsSources:
+    - metricSourceType: pod
+      targetMetric: "vllm:gpu_cache_usage_perc"
+      targetValue: "0.5"   # Lower target to encourage more scaling
+      path: /metrics
+      port: "8000"
+  # Cost configuration - AWS g5.xlarge @ $1.02/hr
+  # Budget $3/hour = max ~3 g5.xlarge instances
+  costConfig:
+    enabled: true
+    budgetPerHour: "3"
+    preferSpotInstances: true
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 30
+    scaleUp:
+      stabilizationWindowSeconds: 15

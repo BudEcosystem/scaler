@@ -29,7 +29,7 @@ import (
 // Default values for scaling configuration.
 const (
 	DefaultMaxScaleUpRate           = 2.0
-	DefaultMaxScaleDownRate         = 2.0
+	DefaultMaxScaleDownRate         = 0.5 // Can scale down to 50% of current replicas per tick
 	DefaultUpFluctuationTolerance   = 0.1
 	DefaultDownFluctuationTolerance = 0.1
 	DefaultScaleUpCooldownWindow    = 0 * time.Second
@@ -136,9 +136,9 @@ type baseScalingContext struct {
 	metricTargets map[string]float64
 
 	// GPU configuration
-	gpuAware             bool
-	gpuMemoryThreshold   int32
-	gpuComputeThreshold  int32
+	gpuAware            bool
+	gpuMemoryThreshold  int32
+	gpuComputeThreshold int32
 
 	// Cost configuration
 	costAware     bool
@@ -335,8 +335,8 @@ func (c *baseScalingContext) parseAnnotations(annotations map[string]string) {
 }
 
 // Replica bounds implementation
-func (c *baseScalingContext) GetMinReplicas() int32       { return c.minReplicas }
-func (c *baseScalingContext) GetMaxReplicas() int32       { return c.maxReplicas }
+func (c *baseScalingContext) GetMinReplicas() int32         { return c.minReplicas }
+func (c *baseScalingContext) GetMaxReplicas() int32         { return c.maxReplicas }
 func (c *baseScalingContext) SetMinReplicas(replicas int32) { c.minReplicas = replicas }
 func (c *baseScalingContext) SetMaxReplicas(replicas int32) { c.maxReplicas = replicas }
 
@@ -349,16 +349,18 @@ func (c *baseScalingContext) GetUpFluctuationTolerance() float64   { return c.up
 func (c *baseScalingContext) GetDownFluctuationTolerance() float64 { return c.downFluctuationTolerance }
 
 // Cooldown windows implementation
-func (c *baseScalingContext) GetScaleUpCooldownWindow() time.Duration   { return c.scaleUpCooldownWindow }
-func (c *baseScalingContext) GetScaleDownCooldownWindow() time.Duration { return c.scaleDownCooldownWindow }
+func (c *baseScalingContext) GetScaleUpCooldownWindow() time.Duration { return c.scaleUpCooldownWindow }
+func (c *baseScalingContext) GetScaleDownCooldownWindow() time.Duration {
+	return c.scaleDownCooldownWindow
+}
 
 // Time windows implementation
 func (c *baseScalingContext) GetPanicWindow() time.Duration  { return c.panicWindow }
 func (c *baseScalingContext) GetStableWindow() time.Duration { return c.stableWindow }
 
 // KPA configuration implementation
-func (c *baseScalingContext) GetPanicThreshold() float64 { return c.panicThreshold }
-func (c *baseScalingContext) GetInPanicMode() bool       { return c.inPanicMode }
+func (c *baseScalingContext) GetPanicThreshold() float64  { return c.panicThreshold }
+func (c *baseScalingContext) GetInPanicMode() bool        { return c.inPanicMode }
 func (c *baseScalingContext) SetInPanicMode(inPanic bool) { c.inPanicMode = inPanic }
 
 // Scale-to-zero implementation
@@ -375,17 +377,17 @@ func (c *baseScalingContext) SetTargetValueForMetric(metricName string, value fl
 }
 
 // GPU configuration implementation
-func (c *baseScalingContext) IsGPUAware() bool             { return c.gpuAware }
-func (c *baseScalingContext) GetGPUMemoryThreshold() int32 { return c.gpuMemoryThreshold }
+func (c *baseScalingContext) IsGPUAware() bool              { return c.gpuAware }
+func (c *baseScalingContext) GetGPUMemoryThreshold() int32  { return c.gpuMemoryThreshold }
 func (c *baseScalingContext) GetGPUComputeThreshold() int32 { return c.gpuComputeThreshold }
 
 // Cost configuration implementation
-func (c *baseScalingContext) IsCostAware() bool       { return c.costAware }
+func (c *baseScalingContext) IsCostAware() bool         { return c.costAware }
 func (c *baseScalingContext) GetBudgetPerHour() float64 { return c.budgetPerHour }
 func (c *baseScalingContext) GetBudgetPerDay() float64  { return c.budgetPerDay }
 
 // Prediction configuration implementation
-func (c *baseScalingContext) IsPredictionEnabled() bool { return c.predictionEnabled }
+func (c *baseScalingContext) IsPredictionEnabled() bool  { return c.predictionEnabled }
 func (c *baseScalingContext) GetLookAheadMinutes() int32 { return c.lookAheadMinutes }
 
 // ScalingContextProvider compatible methods implementation

@@ -1,0 +1,742 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.1
+  name: budaiscalers.scaler.bud.studio
+spec:
+  group: scaler.bud.studio
+  names:
+    kind: BudAIScaler
+    listKind: BudAIScalerList
+    plural: budaiscalers
+    shortNames:
+    - bas
+    singular: budaiscaler
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.minReplicas
+      name: MIN
+      type: integer
+    - jsonPath: .spec.maxReplicas
+      name: MAX
+      type: integer
+    - jsonPath: .status.actualScale
+      name: REPLICAS
+      type: integer
+    - jsonPath: .spec.scalingStrategy
+      name: STRATEGY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          BudAIScaler is the Schema for the budaiscalers API.
+          It provides autoscaling for GenAI workloads with support for GPU-aware,
+          cost-aware, and predictive scaling.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: BudAIScalerSpec defines the desired state of BudAIScaler.
+            properties:
+              behavior:
+                description: Behavior configures the scaling behavior for scale up
+                  and scale down.
+                properties:
+                  scaleDown:
+                    description: ScaleDown configures scale-down behavior.
+                    properties:
+                      maxScaleRate:
+                        description: |-
+                          MaxScaleRate is the maximum scaling rate.
+                          For example, 2.0 means the replica count can double in one step.
+                        type: string
+                      stabilizationWindowSeconds:
+                        description: |-
+                          StabilizationWindowSeconds is the number of seconds to look back
+                          when calculating desired replicas to avoid flapping.
+                        format: int32
+                        maximum: 3600
+                        minimum: 0
+                        type: integer
+                      tolerance:
+                        description: |-
+                          Tolerance is the threshold for metric fluctuations before scaling.
+                          For example, 0.1 means 10% fluctuation is tolerated.
+                        type: string
+                    type: object
+                  scaleUp:
+                    description: ScaleUp configures scale-up behavior.
+                    properties:
+                      maxScaleRate:
+                        description: |-
+                          MaxScaleRate is the maximum scaling rate.
+                          For example, 2.0 means the replica count can double in one step.
+                        type: string
+                      stabilizationWindowSeconds:
+                        description: |-
+                          StabilizationWindowSeconds is the number of seconds to look back
+                          when calculating desired replicas to avoid flapping.
+                        format: int32
+                        maximum: 3600
+                        minimum: 0
+                        type: integer
+                      tolerance:
+                        description: |-
+                          Tolerance is the threshold for metric fluctuations before scaling.
+                          For example, 0.1 means 10% fluctuation is tolerated.
+                        type: string
+                    type: object
+                type: object
+              costConfig:
+                description: CostConfig configures cost-aware scaling behavior.
+                properties:
+                  budgetPerDay:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: BudgetPerDay is the maximum daily spend for this
+                      workload.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  budgetPerHour:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: BudgetPerHour is the maximum hourly spend for this
+                      workload.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  cloudProvider:
+                    description: CloudProvider for cost integration.
+                    enum:
+                    - aws
+                    - gcp
+                    - azure
+                    type: string
+                  costOptimizationMode:
+                    default: balanced
+                    description: CostOptimizationMode controls the cost/performance
+                      trade-off.
+                    enum:
+                    - balanced
+                    - cost-optimized
+                    - performance
+                    type: string
+                  enabled:
+                    default: false
+                    description: Enabled turns on cost-aware scaling.
+                    type: boolean
+                  preferSpotInstances:
+                    default: false
+                    description: PreferSpotInstances enables spot instance preference.
+                    type: boolean
+                  spotFallbackToOnDemand:
+                    default: true
+                    description: SpotFallbackToOnDemand allows fallback to on-demand
+                      when spot is unavailable.
+                    type: boolean
+                type: object
+              gpuConfig:
+                description: GPUConfig configures GPU-aware scaling behavior.
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled turns on GPU-aware scaling.
+                    type: boolean
+                  gpuComputeThreshold:
+                    description: GPUComputeThreshold triggers scaling when GPU compute
+                      utilization exceeds this percentage.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  gpuMemoryThreshold:
+                    description: GPUMemoryThreshold triggers scaling when GPU memory
+                      utilization exceeds this percentage.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  preferredGPUType:
+                    description: |-
+                      PreferredGPUType specifies the preferred GPU type for scaling.
+                      Examples: "nvidia-a100", "nvidia-h100", "nvidia-l4".
+                    type: string
+                  topologyAware:
+                    default: false
+                    description: TopologyAware enables topology-aware GPU placement.
+                    type: boolean
+                  vgpuSupport:
+                    default: false
+                    description: VGPUSupport enables vGPU/time-slicing awareness.
+                    type: boolean
+                type: object
+              maxReplicas:
+                description: MaxReplicas is the maximum number of replicas.
+                format: int32
+                minimum: 1
+                type: integer
+              metricsSources:
+                description: |-
+                  MetricsSources defines the metrics used for scaling decisions.
+                  At least one metric source must be specified.
+                items:
+                  description: MetricSource defines a metric source configuration.
+                  properties:
+                    endpoint:
+                      description: |-
+                        Endpoint for external or prometheus sources.
+                        For prometheus: the Prometheus server URL.
+                        For external: the service endpoint.
+                      type: string
+                    headers:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Headers to include in requests to external endpoints.
+                        Useful for authentication or custom headers.
+                      type: object
+                    inferenceEngineConfig:
+                      description: InferenceEngineConfig for engine-specific metrics.
+                      properties:
+                        engineType:
+                          description: EngineType specifies the inference engine type.
+                          enum:
+                          - vllm
+                          - tgi
+                          - sglang
+                          - triton
+                          type: string
+                        metricsPath:
+                          default: /metrics
+                          description: MetricsPath for the engine metrics endpoint.
+                          type: string
+                        metricsPort:
+                          default: 8000
+                          description: MetricsPort for the engine metrics endpoint.
+                          format: int32
+                          type: integer
+                      required:
+                      - engineType
+                      type: object
+                    metricSourceType:
+                      description: MetricSourceType specifies how to fetch metrics.
+                      enum:
+                      - pod
+                      - resource
+                      - custom
+                      - external
+                      - prometheus
+                      - inferenceEngine
+                      type: string
+                    path:
+                      description: |-
+                        Path to the metrics endpoint.
+                        For pod type: the path on the pod (e.g., "/metrics").
+                      type: string
+                    port:
+                      description: Port for pod-level metrics.
+                      type: string
+                    promQL:
+                      description: |-
+                        PromQL query for prometheus source type.
+                        The query should return a single value or per-pod values.
+                      type: string
+                    protocolType:
+                      description: ProtocolType for pod and external metric sources.
+                      enum:
+                      - http
+                      - https
+                      type: string
+                    targetMetric:
+                      description: |-
+                        TargetMetric identifies the specific metric to monitor.
+                        For resource type: "cpu" or "memory".
+                        For inference engines: "gpu_cache_usage_perc", "num_requests_waiting", etc.
+                      type: string
+                    targetValue:
+                      description: |-
+                        TargetValue sets the desired threshold for the metric.
+                        The format depends on the metric type (e.g., "80" for 80% utilization).
+                      type: string
+                  required:
+                  - metricSourceType
+                  - targetMetric
+                  - targetValue
+                  type: object
+                minItems: 1
+                type: array
+              minReplicas:
+                default: 1
+                description: |-
+                  MinReplicas is the minimum number of replicas.
+                  Defaults to 1 if not specified.
+                format: int32
+                minimum: 0
+                type: integer
+              multiClusterConfig:
+                description: MultiClusterConfig configures multi-cluster scaling.
+                properties:
+                  clusterWeights:
+                    additionalProperties:
+                      format: int32
+                      type: integer
+                    description: |-
+                      ClusterWeights maps cluster names to their load distribution weights.
+                      Higher weight means more replicas.
+                    type: object
+                  enabled:
+                    default: false
+                    description: Enabled turns on multi-cluster support.
+                    type: boolean
+                  failoverEnabled:
+                    default: true
+                    description: FailoverEnabled allows automatic failover to other
+                      clusters.
+                    type: boolean
+                  federationMode:
+                    default: load-balanced
+                    description: FederationMode defines how replicas are distributed
+                      across clusters.
+                    enum:
+                    - active-active
+                    - active-passive
+                    - load-balanced
+                    type: string
+                  targetClusters:
+                    description: TargetClusters is the list of cluster names to scale
+                      across.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              predictionConfig:
+                description: PredictionConfig configures predictive scaling behavior.
+                properties:
+                  enableLearning:
+                    default: true
+                    description: EnableLearning allows the system to learn from past
+                      scaling decisions.
+                    type: boolean
+                  enabled:
+                    default: false
+                    description: Enabled turns on predictive scaling.
+                    type: boolean
+                  historicalDataDays:
+                    default: 7
+                    description: HistoricalDataDays specifies how many days of history
+                      to use for pattern analysis.
+                    format: int32
+                    maximum: 90
+                    minimum: 1
+                    type: integer
+                  lookAheadMinutes:
+                    default: 15
+                    description: LookAheadMinutes specifies how far ahead to predict
+                      for proactive scaling.
+                    format: int32
+                    maximum: 60
+                    minimum: 5
+                    type: integer
+                type: object
+              scaleTargetRef:
+                description: ScaleTargetRef points to the target resource to scale.
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              scalingStrategy:
+                default: BudScaler
+                description: ScalingStrategy defines the algorithm to use for scaling
+                  decisions.
+                enum:
+                - HPA
+                - KPA
+                - BudScaler
+                type: string
+              scheduleHints:
+                description: |-
+                  ScheduleHints defines known traffic patterns for scheduled scaling.
+                  These work independently of PredictionConfig and can be used for
+                  deterministic schedule-based scaling without ML predictions.
+                items:
+                  description: ScheduleHint defines a known traffic pattern for scheduled
+                    scaling.
+                  properties:
+                    cronExpression:
+                      description: |-
+                        CronExpression specifies when to apply this hint.
+                        Format: "minute hour day-of-month month day-of-week"
+                        Example: "0 9 * * 1-5" for weekday mornings at 9 AM.
+                      type: string
+                    duration:
+                      description: Duration specifies how long to maintain this replica
+                        count.
+                      type: string
+                    name:
+                      description: Name is an identifier for this schedule hint.
+                      type: string
+                    targetReplicas:
+                      description: TargetReplicas is the number of replicas to scale
+                        to.
+                      format: int32
+                      type: integer
+                  required:
+                  - cronExpression
+                  - duration
+                  - name
+                  - targetReplicas
+                  type: object
+                type: array
+              subTargetSelector:
+                description: |-
+                  SubTargetSelector selects a sub-component within the target resource.
+                  For example, a specific role in a StormService.
+                properties:
+                  roleName:
+                    description: RoleName for role-based scaling (e.g., in StormService).
+                    type: string
+                type: object
+            required:
+            - maxReplicas
+            - metricsSources
+            - scaleTargetRef
+            - scalingStrategy
+            type: object
+          status:
+            description: BudAIScalerStatus defines the observed state of BudAIScaler.
+            properties:
+              actualScale:
+                description: ActualScale is the current number of running replicas.
+                format: int32
+                type: integer
+              conditions:
+                description: Conditions represent the current state of the scaler.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              costStatus:
+                description: CostStatus contains current cost information.
+                properties:
+                  budgetUtilization:
+                    description: BudgetUtilization is the percentage of budget used.
+                    format: int32
+                    type: integer
+                  currentHourlyCost:
+                    description: CurrentHourlyCost is the current hourly cost.
+                    type: string
+                  onDemandInstancesInUse:
+                    description: OnDemandInstancesInUse is the number of on-demand
+                      instances in use.
+                    format: int32
+                    type: integer
+                  projectedDailyCost:
+                    description: ProjectedDailyCost is the projected daily cost.
+                    type: string
+                  spotInstancesInUse:
+                    description: SpotInstancesInUse is the number of spot instances
+                      currently in use.
+                    format: int32
+                    type: integer
+                type: object
+              desiredScale:
+                description: DesiredScale is the computed desired number of replicas.
+                format: int32
+                type: integer
+              gpuStatus:
+                description: GPUStatus contains current GPU utilization information.
+                properties:
+                  averageComputeUtilization:
+                    description: AverageComputeUtilization is the average GPU compute
+                      utilization percentage.
+                    format: int32
+                    type: integer
+                  averageMemoryUtilization:
+                    description: AverageMemoryUtilization is the average GPU memory
+                      utilization percentage.
+                    format: int32
+                    type: integer
+                  gpuType:
+                    description: GPUType is the type of GPU in use.
+                    type: string
+                  totalGPUs:
+                    description: TotalGPUs is the total number of GPUs in use.
+                    format: int32
+                    type: integer
+                type: object
+              lastScaleTime:
+                description: LastScaleTime is the last time the scaler changed the
+                  replica count.
+                format: date-time
+                type: string
+              learningStatus:
+                description: LearningStatus contains adaptive learning system state.
+                properties:
+                  calibrationNeeded:
+                    description: CalibrationNeeded indicates if calibration is recommended.
+                    type: boolean
+                  configMapName:
+                    description: ConfigMapName is the name of the ConfigMap storing
+                      learning data.
+                    type: string
+                  currentSeasonalFactor:
+                    description: CurrentSeasonalFactor is the current seasonal adjustment
+                      factor.
+                    type: string
+                  dataPointsCollected:
+                    description: DataPointsCollected is the total number of data points
+                      collected for learning.
+                    format: int32
+                    type: integer
+                  detectedPattern:
+                    description: DetectedPattern is the currently detected LLM workload
+                      pattern.
+                    type: string
+                  directionAccuracy:
+                    description: DirectionAccuracy is the accuracy of scale direction
+                      predictions.
+                    type: string
+                  lastCalibration:
+                    description: LastCalibration is when the learning system was last
+                      calibrated.
+                    format: date-time
+                    type: string
+                  oldestDataPoint:
+                    description: OldestDataPoint is the timestamp of the oldest data
+                      point.
+                    format: date-time
+                    type: string
+                  overallAccuracy:
+                    description: OverallAccuracy is the overall prediction accuracy
+                      percentage.
+                    type: string
+                  patternConfidence:
+                    description: PatternConfidence is the confidence level of the
+                      detected pattern (0-1).
+                    type: string
+                  recentMAE:
+                    description: RecentMAE is the recent Mean Absolute Error (in replica
+                      count).
+                    type: string
+                  recentMAPE:
+                    description: RecentMAPE is the recent Mean Absolute Percentage
+                      Error.
+                    type: string
+                  seasonalDataComplete:
+                    description: SeasonalDataComplete indicates if all 168 time buckets
+                      have sufficient data.
+                    type: boolean
+                  storageUsed:
+                    description: StorageUsed is the approximate storage used for learning
+                      data.
+                    type: string
+                type: object
+              multiClusterStatus:
+                description: MultiClusterStatus contains federation status.
+                properties:
+                  clusterDistribution:
+                    additionalProperties:
+                      format: int32
+                      type: integer
+                    description: ClusterDistribution maps cluster names to their replica
+                      counts.
+                    type: object
+                  healthyClusters:
+                    description: HealthyClusters is the list of healthy clusters.
+                    items:
+                      type: string
+                    type: array
+                  totalReplicasAcrossClusters:
+                    description: TotalReplicasAcrossClusters is the total replicas
+                      across all clusters.
+                    format: int32
+                    type: integer
+                  unhealthyClusters:
+                    description: UnhealthyClusters is the list of unhealthy clusters.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              predictionStatus:
+                description: PredictionStatus contains current prediction state.
+                properties:
+                  activeScheduleHint:
+                    description: ActiveScheduleHint is the currently active schedule
+                      hint, if any.
+                    type: string
+                  nextPredictedChange:
+                    description: NextPredictedChange is when the next scaling change
+                      is predicted.
+                    format: date-time
+                    type: string
+                  predictedReplicas:
+                    description: PredictedReplicas is the predicted number of replicas
+                      needed.
+                    format: int32
+                    type: integer
+                  predictionConfidence:
+                    description: PredictionConfidence is the confidence level of the
+                      prediction (0-1).
+                    type: string
+                type: object
+              scalingHistory:
+                description: ScalingHistory stores recent scaling decisions for debugging.
+                items:
+                  description: ScalingDecision records a single scaling decision.
+                  properties:
+                    algorithm:
+                      description: Algorithm is the algorithm that made the decision.
+                      type: string
+                    error:
+                      description: Error contains any error message if scaling failed.
+                      type: string
+                    newScale:
+                      description: NewScale is the number of replicas after scaling.
+                      format: int32
+                      type: integer
+                    previousScale:
+                      description: PreviousScale is the number of replicas before
+                        scaling.
+                      format: int32
+                      type: integer
+                    reason:
+                      description: Reason explains why the scaling decision was made.
+                      type: string
+                    success:
+                      description: Success indicates whether the scaling operation
+                        succeeded.
+                      type: boolean
+                    timestamp:
+                      description: Timestamp when the scaling decision was made.
+                      format: date-time
+                      type: string
+                  required:
+                  - algorithm
+                  - newScale
+                  - previousScale
+                  - reason
+                  - success
+                  - timestamp
+                  type: object
+                maxItems: 10
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

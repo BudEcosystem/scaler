@@ -1,6 +1,6 @@
 apiVersion: v2
 name: scaler
-description: BudAIScaler - Kubernetes autoscaler for GenAI workloads with GPU-aware, cost-aware, and predictive scaling
+description: Scaler - AI Infrastructure Platform with autoscaling, routing, and GPU virtualization for GenAI workloads
 
 type: application
 
@@ -17,6 +17,8 @@ keywords:
   - llm
   - vllm
   - tgi
+  - routing
+  - gpu-virtualization
 
 home: https://github.com/BudEcosystem/scaler
 

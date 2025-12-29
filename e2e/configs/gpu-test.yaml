@@ -1,0 +1,33 @@
+---
+# Test GPU-aware scaling
+# Uses mock DCGM exporter for GPU metrics
+apiVersion: scaler.bud.studio/v1alpha1
+kind: BudAIScaler
+metadata:
+  name: gpu-aware-scaler
+  namespace: llm-test
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llm-inference-sim
+  minReplicas: 1
+  maxReplicas: 5
+  scalingStrategy: BudScaler
+  # Primary metric from simulator
+  metricsSources:
+    - metricSourceType: pod
+      targetMetric: "vllm:gpu_cache_usage_perc"
+      targetValue: "0.7"
+      path: /metrics
+      port: "8000"
+  # GPU configuration - uses thresholds for GPU memory/compute
+  gpuConfig:
+    enabled: true
+    gpuMemoryThreshold: 70    # Scale up when GPU memory > 70%
+    gpuComputeThreshold: 80   # Scale up when GPU compute > 80%
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 30
+    scaleUp:
+      stabilizationWindowSeconds: 15

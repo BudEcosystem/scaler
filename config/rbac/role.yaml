@@ -2,126 +2,352 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: budaiscaler-manager-role
+  name: budaiscaler-role
 rules:
-  # BudAIScaler resources
-  - apiGroups:
-      - scaler.bud.studio
-    resources:
-      - budaiscalers
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - scaler.bud.studio
-    resources:
-      - budaiscalers/status
-    verbs:
-      - get
-      - patch
-      - update
-  - apiGroups:
-      - scaler.bud.studio
-    resources:
-      - budaiscalers/finalizers
-    verbs:
-      - update
-
-  # Workload resources (Deployments, StatefulSets, ReplicaSets)
-  - apiGroups:
-      - apps
-    resources:
-      - deployments
-      - statefulsets
-      - replicasets
-    verbs:
-      - get
-      - list
-      - watch
-      - update
-      - patch
-  - apiGroups:
-      - apps
-    resources:
-      - deployments/scale
-      - statefulsets/scale
-      - replicasets/scale
-    verbs:
-      - get
-      - update
-      - patch
-
-  # HorizontalPodAutoscaler for HPA strategy
-  - apiGroups:
-      - autoscaling
-    resources:
-      - horizontalpodautoscalers
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-
-  # Pods for metrics collection
-  - apiGroups:
-      - ""
-    resources:
-      - pods
-    verbs:
-      - get
-      - list
-      - watch
-
-  # Events for recording scaling events
-  - apiGroups:
-      - ""
-    resources:
-      - events
-    verbs:
-      - create
-      - patch
-
-  # Metrics API for resource metrics
-  - apiGroups:
-      - metrics.k8s.io
-    resources:
-      - pods
-      - nodes
-    verbs:
-      - get
-      - list
-      - watch
-
-  # ConfigMaps for leader election
-  - apiGroups:
-      - ""
-    resources:
-      - configmaps
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
-  - apiGroups:
-      - coordination.k8s.io
-    resources:
-      - leases
-    verbs:
-      - get
-      - list
-      - watch
-      - create
-      - update
-      - patch
-      - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - mutatingwebhookconfigurations
+  - validatingwebhookconfigurations
+  verbs:
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - apps
+  resources:
+  - controllerrevisions
+  - deployments
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments/scale
+  - deployments/status
+  - replicasets/scale
+  - statefulsets/scale
+  - statefulsets/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - autoscaling.aibrix.ai
+  resources:
+  - podautoscalers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - autoscaling.aibrix.ai
+  resources:
+  - podautoscalers/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - autoscaling.aibrix.ai
+  resources:
+  - podautoscalers/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  - pods/status
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - httproutes
+  - referencegrants
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - metrics.k8s.io
+  resources:
+  - nodes
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - model.aibrix.ai
+  resources:
+  - modeladapters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - model.aibrix.ai
+  resources:
+  - modeladapters/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - model.aibrix.ai
+  resources:
+  - modeladapters/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - orchestration.aibrix.ai
+  resources:
+  - kvcaches
+  - podsets
+  - rayclusterfleets
+  - rayclusterreplicasets
+  - rolesets
+  - stormservices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - orchestration.aibrix.ai
+  resources:
+  - kvcaches/finalizers
+  - podsets/finalizers
+  - rayclusterfleets/finalizers
+  - rayclusterreplicasets/finalizers
+  - rolesets/finalizers
+  - stormservices/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - orchestration.aibrix.ai
+  resources:
+  - kvcaches/status
+  - podsets/status
+  - rayclusterfleets/status
+  - rayclusterreplicasets/status
+  - rolesets/status
+  - stormservices/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ray.io
+  resources:
+  - rayclusters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ray.io
+  resources:
+  - rayclusters/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - ray.io
+  resources:
+  - rayclusters/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - scaler.bud.studio
+  resources:
+  - budaiscalers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - scaler.bud.studio
+  resources:
+  - budaiscalers/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - scaler.bud.studio
+  resources:
+  - budaiscalers/status
+  verbs:
+  - get
+  - patch
+  - update

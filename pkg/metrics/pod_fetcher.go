@@ -282,13 +282,13 @@ func (f *InferenceEngineMetricFetcher) FetchPodMetrics(ctx context.Context, pod 
 func (f *InferenceEngineMetricFetcher) mapVLLMMetricName(name string) string {
 	// vLLM metric name mappings
 	vllmMetrics := map[string]string{
-		"gpu_cache_usage":       "vllm:gpu_cache_usage_perc",
-		"gpu_cache_usage_perc":  "vllm:gpu_cache_usage_perc",
-		"requests_running":      "vllm:num_requests_running",
-		"num_requests_running":  "vllm:num_requests_running",
-		"requests_waiting":      "vllm:num_requests_waiting",
-		"num_requests_waiting":  "vllm:num_requests_waiting",
-		"kv_cache_utilization":  "vllm:gpu_cache_usage_perc",
+		"gpu_cache_usage":      "vllm:gpu_cache_usage_perc",
+		"gpu_cache_usage_perc": "vllm:gpu_cache_usage_perc",
+		"requests_running":     "vllm:num_requests_running",
+		"num_requests_running": "vllm:num_requests_running",
+		"requests_waiting":     "vllm:num_requests_waiting",
+		"num_requests_waiting": "vllm:num_requests_waiting",
+		"kv_cache_utilization": "vllm:gpu_cache_usage_perc",
 	}
 
 	if mapped, ok := vllmMetrics[name]; ok {
@@ -301,9 +301,9 @@ func (f *InferenceEngineMetricFetcher) mapVLLMMetricName(name string) string {
 func (f *InferenceEngineMetricFetcher) mapTGIMetricName(name string) string {
 	// TGI metric name mappings
 	tgiMetrics := map[string]string{
-		"requests_running":     "tgi_request_count",
-		"queue_depth":          "tgi_queue_size",
-		"batch_size":           "tgi_batch_current_size",
+		"requests_running": "tgi_request_count",
+		"queue_depth":      "tgi_queue_size",
+		"batch_size":       "tgi_batch_current_size",
 	}
 
 	if mapped, ok := tgiMetrics[name]; ok {

@@ -1,0 +1,147 @@
+---
+# Mock DCGM Exporter for GPU metrics testing
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mock-dcgm-config
+  namespace: llm-test
+data:
+  metrics.py: |
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import os
+    import threading
+
+    class MetricsState:
+        # GPU metrics (0-100 scale)
+        gpu_util = float(os.environ.get('INITIAL_GPU_UTIL', '50'))
+        fb_used = float(os.environ.get('INITIAL_FB_USED', '20000'))  # MB
+        fb_total = float(os.environ.get('FB_TOTAL', '40000'))  # MB (40GB A100)
+        lock = threading.Lock()
+
+    class MetricsHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/metrics':
+                with MetricsState.lock:
+                    lines = [
+                        '# HELP DCGM_FI_DEV_GPU_UTIL GPU utilization',
+                        '# TYPE DCGM_FI_DEV_GPU_UTIL gauge',
+                        'DCGM_FI_DEV_GPU_UTIL{gpu="0",UUID="GPU-abc123",modelName="NVIDIA A100"} %s' % MetricsState.gpu_util,
+                        '# HELP DCGM_FI_DEV_FB_USED Frame buffer memory used in MB',
+                        '# TYPE DCGM_FI_DEV_FB_USED gauge',
+                        'DCGM_FI_DEV_FB_USED{gpu="0",UUID="GPU-abc123"} %s' % MetricsState.fb_used,
+                        '# HELP DCGM_FI_DEV_FB_TOTAL Frame buffer memory total in MB',
+                        '# TYPE DCGM_FI_DEV_FB_TOTAL gauge',
+                        'DCGM_FI_DEV_FB_TOTAL{gpu="0",UUID="GPU-abc123"} %s' % MetricsState.fb_total,
+                    ]
+                    metrics = '\n'.join(lines) + '\n'
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(metrics.encode())
+            elif self.path == '/health' or self.path == '/ready':
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'OK')
+            elif self.path.startswith('/set'):
+                try:
+                    params = {}
+                    if '?' in self.path:
+                        query = self.path.split('?')[1]
+                        for param in query.split('&'):
+                            key, value = param.split('=')
+                            params[key] = value
+
+                    with MetricsState.lock:
+                        if 'gpu_util' in params:
+                            MetricsState.gpu_util = float(params['gpu_util'])
+                        if 'fb_used' in params:
+                            MetricsState.fb_used = float(params['fb_used'])
+
+                    self.send_response(200)
+                    self.end_headers()
+                    response = 'GPU metrics updated: util=%s%%, memory=%s/%sMB (%.1f%%)' % (
+                        MetricsState.gpu_util,
+                        MetricsState.fb_used,
+                        MetricsState.fb_total,
+                        MetricsState.fb_used / MetricsState.fb_total * 100
+                    )
+                    self.wfile.write(response.encode())
+                except Exception as e:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(str(e).encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    if __name__ == '__main__':
+        server = HTTPServer(('0.0.0.0', 9400), MetricsHandler)
+        print('Mock DCGM exporter running on port 9400')
+        server.serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-dcgm-exporter
+  namespace: llm-test
+  labels:
+    app: mock-dcgm-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-dcgm-exporter
+  template:
+    metadata:
+      labels:
+        app: mock-dcgm-exporter
+    spec:
+      containers:
+        - name: mock-dcgm
+          image: python:3.11-slim
+          command: ["python3", "/app/metrics.py"]
+          ports:
+            - containerPort: 9400
+              name: metrics
+          env:
+            - name: INITIAL_GPU_UTIL
+              value: "50"
+            - name: INITIAL_FB_USED
+              value: "20000"
+            - name: FB_TOTAL
+              value: "40000"
+          volumeMounts:
+            - name: metrics-script
+              mountPath: /app
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9400
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9400
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: metrics-script
+          configMap:
+            name: mock-dcgm-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-dcgm-exporter
+  namespace: llm-test
+spec:
+  ports:
+    - port: 9400
+      targetPort: 9400
+      name: metrics
+  selector:
+    app: mock-dcgm-exporter

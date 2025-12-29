@@ -145,7 +145,7 @@ type GPUMetrics struct {
 	// GPUType is the type of GPU (e.g., "nvidia-a100").
 	GPUType string
 	// GPUCount is the number of GPUs.
-	GPUCount int
+	GPUCount int32
 	// PerGPUMetrics contains per-GPU metrics.
 	PerGPUMetrics []PerGPUMetric
 	// Timestamp is when the metrics were collected.
@@ -198,6 +198,8 @@ type PredictionData struct {
 	PredictionTime time.Time
 	// LookAheadMinutes is how far ahead the prediction looks.
 	LookAheadMinutes int
+	// Reason explains the prediction.
+	Reason string
 	// Source indicates the prediction source.
 	Source PredictionSource
 }

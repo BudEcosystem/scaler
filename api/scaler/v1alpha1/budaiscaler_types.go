@@ -89,6 +89,12 @@ type BudAIScalerSpec struct {
 	// +optional
 	PredictionConfig *PredictionConfig `json:"predictionConfig,omitempty"`
 
+	// ScheduleHints defines known traffic patterns for scheduled scaling.
+	// These work independently of PredictionConfig and can be used for
+	// deterministic schedule-based scaling without ML predictions.
+	// +optional
+	ScheduleHints []ScheduleHint `json:"scheduleHints,omitempty"`
+
 	// MultiClusterConfig configures multi-cluster scaling.
 	// +optional
 	MultiClusterConfig *MultiClusterConfig `json:"multiClusterConfig,omitempty"`
@@ -331,10 +337,6 @@ type PredictionConfig struct {
 	// +kubebuilder:validation:Maximum=90
 	HistoricalDataDays *int32 `json:"historicalDataDays,omitempty"`
 
-	// ScheduleHints defines known traffic patterns for scheduled scaling.
-	// +optional
-	ScheduleHints []ScheduleHint `json:"scheduleHints,omitempty"`
-
 	// EnableLearning allows the system to learn from past scaling decisions.
 	// +optional
 	// +kubebuilder:default=true
@@ -450,6 +452,10 @@ type BudAIScalerStatus struct {
 	// +optional
 	PredictionStatus *PredictionStatus `json:"predictionStatus,omitempty"`
 
+	// LearningStatus contains adaptive learning system state.
+	// +optional
+	LearningStatus *LearningStatus `json:"learningStatus,omitempty"`
+
 	// MultiClusterStatus contains federation status.
 	// +optional
 	MultiClusterStatus *MultiClusterStatus `json:"multiClusterStatus,omitempty"`
@@ -527,6 +533,53 @@ type PredictionStatus struct {
 
 	// ActiveScheduleHint is the currently active schedule hint, if any.
 	ActiveScheduleHint string `json:"activeScheduleHint,omitempty"`
+}
+
+// LearningStatus contains adaptive learning system state.
+type LearningStatus struct {
+	// DataPointsCollected is the total number of data points collected for learning.
+	DataPointsCollected int32 `json:"dataPointsCollected,omitempty"`
+
+	// OldestDataPoint is the timestamp of the oldest data point.
+	// +optional
+	OldestDataPoint *metav1.Time `json:"oldestDataPoint,omitempty"`
+
+	// OverallAccuracy is the overall prediction accuracy percentage.
+	OverallAccuracy string `json:"overallAccuracy,omitempty"`
+
+	// DirectionAccuracy is the accuracy of scale direction predictions.
+	DirectionAccuracy string `json:"directionAccuracy,omitempty"`
+
+	// RecentMAPE is the recent Mean Absolute Percentage Error.
+	RecentMAPE string `json:"recentMAPE,omitempty"`
+
+	// RecentMAE is the recent Mean Absolute Error (in replica count).
+	RecentMAE string `json:"recentMAE,omitempty"`
+
+	// SeasonalDataComplete indicates if all 168 time buckets have sufficient data.
+	SeasonalDataComplete bool `json:"seasonalDataComplete,omitempty"`
+
+	// CurrentSeasonalFactor is the current seasonal adjustment factor.
+	CurrentSeasonalFactor string `json:"currentSeasonalFactor,omitempty"`
+
+	// DetectedPattern is the currently detected LLM workload pattern.
+	DetectedPattern string `json:"detectedPattern,omitempty"`
+
+	// PatternConfidence is the confidence level of the detected pattern (0-1).
+	PatternConfidence string `json:"patternConfidence,omitempty"`
+
+	// LastCalibration is when the learning system was last calibrated.
+	// +optional
+	LastCalibration *metav1.Time `json:"lastCalibration,omitempty"`
+
+	// CalibrationNeeded indicates if calibration is recommended.
+	CalibrationNeeded bool `json:"calibrationNeeded,omitempty"`
+
+	// ConfigMapName is the name of the ConfigMap storing learning data.
+	ConfigMapName string `json:"configMapName,omitempty"`
+
+	// StorageUsed is the approximate storage used for learning data.
+	StorageUsed string `json:"storageUsed,omitempty"`
 }
 
 // MultiClusterStatus contains federation status.

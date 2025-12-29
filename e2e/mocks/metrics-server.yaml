@@ -1,0 +1,138 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mock-metrics-config
+  namespace: llm-test
+data:
+  metrics.py: |
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import os
+    import threading
+
+    class MetricsState:
+        gpu_cache_usage = float(os.environ.get('INITIAL_GPU_CACHE', '0'))
+        num_requests_running = int(os.environ.get('INITIAL_REQUESTS_RUNNING', '0'))
+        num_requests_waiting = int(os.environ.get('INITIAL_REQUESTS_WAITING', '0'))
+        lock = threading.Lock()
+
+    class MetricsHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/metrics':
+                with MetricsState.lock:
+                    lines = [
+                        '# HELP vllm_gpu_cache_usage_perc GPU KV-cache usage',
+                        '# TYPE vllm_gpu_cache_usage_perc gauge',
+                        'vllm_gpu_cache_usage_perc{model_name="mock-model"} %s' % MetricsState.gpu_cache_usage,
+                        '# HELP vllm_num_requests_running Number of requests running',
+                        '# TYPE vllm_num_requests_running gauge',
+                        'vllm_num_requests_running{model_name="mock-model"} %s' % MetricsState.num_requests_running,
+                        '# HELP vllm_num_requests_waiting Number of requests waiting',
+                        '# TYPE vllm_num_requests_waiting gauge',
+                        'vllm_num_requests_waiting{model_name="mock-model"} %s' % MetricsState.num_requests_waiting,
+                    ]
+                    metrics = '\n'.join(lines) + '\n'
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(metrics.encode())
+            elif self.path == '/health' or self.path == '/ready':
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'OK')
+            elif self.path.startswith('/set'):
+                try:
+                    params = {}
+                    if '?' in self.path:
+                        query = self.path.split('?')[1]
+                        for param in query.split('&'):
+                            key, value = param.split('=')
+                            params[key] = value
+
+                    with MetricsState.lock:
+                        if 'gpu_cache' in params:
+                            MetricsState.gpu_cache_usage = float(params['gpu_cache'])
+                        if 'requests_running' in params:
+                            MetricsState.num_requests_running = int(params['requests_running'])
+                        if 'requests_waiting' in params:
+                            MetricsState.num_requests_waiting = int(params['requests_waiting'])
+
+                    self.send_response(200)
+                    self.end_headers()
+                    response = 'Metrics updated: gpu_cache=%s, running=%s, waiting=%s' % (MetricsState.gpu_cache_usage, MetricsState.num_requests_running, MetricsState.num_requests_waiting)
+                    self.wfile.write(response.encode())
+                except Exception as e:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(str(e).encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    if __name__ == '__main__':
+        server = HTTPServer(('0.0.0.0', 8000), MetricsHandler)
+        print('Mock metrics server running on port 8000')
+        server.serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-vllm-metrics
+  namespace: llm-test
+  labels:
+    app: mock-vllm-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-vllm-metrics
+  template:
+    metadata:
+      labels:
+        app: mock-vllm-metrics
+    spec:
+      containers:
+        - name: mock-metrics
+          image: python:3.11-slim
+          command: ["python3", "/app/metrics.py"]
+          ports:
+            - containerPort: 8000
+              name: metrics
+          env:
+            - name: INITIAL_GPU_CACHE
+              value: "0"
+          volumeMounts:
+            - name: metrics-script
+              mountPath: /app
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: metrics-script
+          configMap:
+            name: mock-metrics-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-vllm-metrics
+  namespace: llm-test
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: metrics
+  selector:
+    app: mock-vllm-metrics

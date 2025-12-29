@@ -1,0 +1,68 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm-test
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-inference-sim
+  namespace: llm-test
+  labels:
+    app: llm-inference-sim
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-inference-sim
+  template:
+    metadata:
+      labels:
+        app: llm-inference-sim
+    spec:
+      containers:
+        - name: simulator
+          image: ghcr.io/llm-d/llm-d-inference-sim:v0.6.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          args:
+            - --port=8000
+            - --model=Qwen/Qwen2.5-1.5B-Instruct
+            - --fake-metrics={"running-requests":5,"waiting-requests":10,"kv-cache-usage":0.85}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-inference-sim
+  namespace: llm-test
+  labels:
+    app: llm-inference-sim
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http
+  selector:
+    app: llm-inference-sim

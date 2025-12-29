@@ -1,0 +1,32 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: load-generator
+  namespace: llm-test
+spec:
+  restartPolicy: Never
+  containers:
+    - name: load-generator
+      image: curlimages/curl:latest
+      command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Starting load test..."
+          SIMULATOR_URL="http://llm-inference-sim:8000"
+
+          # Send concurrent requests in background
+          for batch in $(seq 1 10); do
+            echo "Batch $batch - sending 20 concurrent requests"
+            for i in $(seq 1 20); do
+              curl -s -X POST "$SIMULATOR_URL/v1/chat/completions" \
+                -H "Content-Type: application/json" \
+                -d '{"model":"Qwen/Qwen2.5-1.5B-Instruct","messages":[{"role":"user","content":"Write a detailed essay about cloud computing, kubernetes, and container orchestration. Explain the benefits and challenges."}],"max_tokens":1000}' &
+            done
+            wait
+            sleep 2
+          done
+
+          echo "Load test completed"
+          sleep 10

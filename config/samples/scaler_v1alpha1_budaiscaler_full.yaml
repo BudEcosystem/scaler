@@ -65,23 +65,31 @@ spec:
     preferSpotInstances: true
     maxSpotPercentage: 70
 
-  # Predictive scaling
+  # Predictive scaling with adaptive learning
   predictionConfig:
     enabled: true
     lookAheadMinutes: 30
-    scheduleHints:
-      # Scale up before business hours
-      - cronExpression: "0 8 * * 1-5"
-        expectedLoad: "high"
-        preScaleMinutes: 15
-      # Scale down for off-hours
-      - cronExpression: "0 20 * * 1-5"
-        expectedLoad: "low"
-        preScaleMinutes: 10
-      # Weekend pattern
-      - cronExpression: "0 0 * * 0,6"
-        expectedLoad: "minimal"
-        preScaleMinutes: 0
+    historicalDataDays: 14
+    enableLearning: true
+
+  # Schedule hints (top-level, work independently of prediction)
+  # These provide deterministic schedule-based scaling
+  scheduleHints:
+    # Scale up before business hours (8 AM weekdays)
+    - name: business-hours-start
+      cronExpression: "0 8 * * 1-5"
+      targetReplicas: 20
+      duration: 12h
+    # Scale down for off-hours (8 PM weekdays)
+    - name: off-hours
+      cronExpression: "0 20 * * 1-5"
+      targetReplicas: 5
+      duration: 12h
+    # Weekend minimal
+    - name: weekend
+      cronExpression: "0 0 * * 0,6"
+      targetReplicas: 2
+      duration: 24h
 
   # Scaling behavior
   behavior:

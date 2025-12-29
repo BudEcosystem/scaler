@@ -1,0 +1,25 @@
+---
+apiVersion: scaler.bud.studio/v1alpha1
+kind: BudAIScaler
+metadata:
+  name: mock-metrics-scaler
+  namespace: llm-test
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mock-vllm-metrics
+  minReplicas: 1
+  maxReplicas: 5
+  scalingStrategy: BudScaler
+  metricsSources:
+    - metricSourceType: pod
+      targetMetric: vllm_gpu_cache_usage_perc
+      targetValue: "0.7"
+      path: /metrics
+      port: "8000"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 30
+    scaleUp:
+      stabilizationWindowSeconds: 10

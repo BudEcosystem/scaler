@@ -19,17 +19,23 @@ package budaiscaler
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	scalerv1alpha1 "github.com/BudEcosystem/scaler/api/scaler/v1alpha1"
 	"github.com/BudEcosystem/scaler/pkg/aggregation"
-	"github.com/BudEcosystem/scaler/pkg/algorithm"
 	scalercontext "github.com/BudEcosystem/scaler/pkg/context"
+	"github.com/BudEcosystem/scaler/pkg/controller/budaiscaler/algorithm"
+	"github.com/BudEcosystem/scaler/pkg/controller/budaiscaler/cost"
+	"github.com/BudEcosystem/scaler/pkg/controller/budaiscaler/learning"
+	"github.com/BudEcosystem/scaler/pkg/controller/budaiscaler/prediction"
+	"github.com/BudEcosystem/scaler/pkg/gpu"
 	"github.com/BudEcosystem/scaler/pkg/metrics"
 	"github.com/BudEcosystem/scaler/pkg/types"
 )
@@ -42,6 +48,10 @@ type AutoScaler struct {
 	aggregator       *aggregation.DefaultMetricAggregator
 	collector        *metrics.MultiSourceCollector
 	workloadScale    *WorkloadScale
+	gpuProvider      gpu.Provider
+	costCalculators  map[cost.CloudProvider]*cost.Calculator
+	predictor        *prediction.Predictor
+	learningSystems  map[string]*learning.LearningSystem // Per-scaler learning systems
 }
 
 // NewAutoScaler creates a new AutoScaler.
@@ -52,6 +62,13 @@ func NewAutoScaler(
 	aggregator := aggregation.NewMetricAggregator()
 	collector := metrics.NewMultiSourceCollector(metricsFactory, aggregator)
 
+	// Initialize cost calculators for each cloud provider
+	costCalculators := map[cost.CloudProvider]*cost.Calculator{
+		cost.AWS:   cost.NewCalculator(cost.AWS),
+		cost.GCP:   cost.NewCalculator(cost.GCP),
+		cost.Azure: cost.NewCalculator(cost.Azure),
+	}
+
 	return &AutoScaler{
 		client:           client,
 		metricsFactory:   metricsFactory,
@@ -59,6 +76,9 @@ func NewAutoScaler(
 		aggregator:       aggregator,
 		collector:        collector,
 		workloadScale:    NewWorkloadScale(client),
+		costCalculators:  costCalculators,
+		predictor:        prediction.NewPredictor(),
+		learningSystems:  make(map[string]*learning.LearningSystem),
 	}
 }
 
@@ -98,6 +118,8 @@ func (a *AutoScaler) Scale(ctx context.Context, scaler *scalerv1alpha1.BudAIScal
 		return nil, fmt.Errorf("failed to get pods: %w", err)
 	}
 
+	klog.V(4).InfoS("Scale check", "scaler", scaler.Name, "currentReplicas", scale.Spec.Replicas, "podCount", len(pods))
+
 	// Collect metrics
 	metricSnapshots, err := a.collector.CollectAllMetrics(ctx, pods, scaler.Spec.MetricsSources)
 	if err != nil {
@@ -129,6 +151,22 @@ func (a *AutoScaler) Scale(ctx context.Context, scaler *scalerv1alpha1.BudAIScal
 		request.GPUMetrics = a.collectGPUMetrics(ctx, pods, scaler)
 	}
 
+	// Get cost metrics if enabled
+	if scaler.Spec.CostConfig != nil && scaler.Spec.CostConfig.Enabled {
+		request.CostMetrics = a.collectCostMetrics(ctx, scaler, scale.Spec.Replicas)
+	}
+
+	// Load schedule hints from top-level spec (works independently of prediction config)
+	a.loadScheduleHints(scaler)
+
+	// Get prediction data if enabled, or schedule hint data if hints are active
+	if scaler.Spec.PredictionConfig != nil && scaler.Spec.PredictionConfig.Enabled {
+		request.PredictionData = a.getPredictionData(ctx, scaler, metricSnapshots)
+	} else if len(scaler.Spec.ScheduleHints) > 0 {
+		// Schedule hints can work without full prediction enabled
+		request.PredictionData = a.getScheduleHintData(scaler)
+	}
+
 	// Get the appropriate algorithm
 	algo, err := a.algorithmFactory.Create(scaler.Spec.ScalingStrategy)
 	if err != nil {
@@ -140,6 +178,13 @@ func (a *AutoScaler) Scale(ctx context.Context, scaler *scalerv1alpha1.BudAIScal
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute recommendation: %w", err)
 	}
+
+	klog.V(4).InfoS("Scaling recommendation",
+		"scaler", scaler.Name,
+		"currentReplicas", request.CurrentReplicas,
+		"desiredReplicas", recommendation.DesiredReplicas,
+		"direction", recommendation.ScaleDirection,
+		"reason", recommendation.Reason)
 
 	result.Recommendation = recommendation
 	result.DesiredReplicas = recommendation.DesiredReplicas
@@ -160,6 +205,13 @@ func (a *AutoScaler) Scale(ctx context.Context, scaler *scalerv1alpha1.BudAIScal
 		}
 
 		result.Scaled = true
+	}
+
+	// Record feedback for learning system if enabled
+	if scaler.Spec.PredictionConfig != nil && scaler.Spec.PredictionConfig.EnableLearning {
+		a.recordLearningFeedback(ctx, scaler, request, result, metricSnapshots)
+		// Verify any past predictions that are now ready
+		a.VerifyLearningPredictions(ctx, scaler)
 	}
 
 	return result, nil
@@ -217,12 +269,169 @@ func isPodReady(pod *corev1.Pod) bool {
 
 // collectGPUMetrics collects GPU metrics from pods.
 func (a *AutoScaler) collectGPUMetrics(ctx context.Context, pods []corev1.Pod, scaler *scalerv1alpha1.BudAIScaler) *types.GPUMetrics {
-	// This is a placeholder for GPU metrics collection
-	// In a real implementation, this would query GPU metrics from pods
-	// using the NVIDIA DCGM or similar monitoring solution
+	// Get GPU provider - either use configured provider or try DCGM exporter
+	provider := a.gpuProvider
+	if provider == nil {
+		// Try to use DCGM exporter service in the same namespace
+		// The service name follows the pattern: dcgm-exporter or nvidia-dcgm-exporter
+		dcgmEndpoint := fmt.Sprintf("http://mock-dcgm-exporter.%s.svc.cluster.local:9400", scaler.Namespace)
+		provider = gpu.NewDCGMProvider(dcgmEndpoint)
+	}
 
-	// For now, return nil to indicate GPU metrics are not available
-	return nil
+	gpuMetrics, err := provider.FetchMetrics(ctx)
+	if err != nil {
+		klog.V(4).InfoS("Failed to fetch GPU metrics", "error", err, "namespace", scaler.Namespace)
+		return nil
+	}
+
+	klog.V(4).InfoS("GPU metrics collected",
+		"memoryUtil", gpuMetrics.AverageMemoryUtilization,
+		"computeUtil", gpuMetrics.AverageComputeUtilization,
+		"gpuCount", gpuMetrics.GPUCount)
+
+	return &types.GPUMetrics{
+		MemoryUtilization:  gpuMetrics.AverageMemoryUtilization,
+		ComputeUtilization: gpuMetrics.AverageComputeUtilization,
+		GPUCount:           int32(gpuMetrics.GPUCount),
+		GPUType:            gpuMetrics.GPUType,
+	}
+}
+
+// SetGPUProvider sets the GPU metrics provider.
+func (a *AutoScaler) SetGPUProvider(provider gpu.Provider) {
+	a.gpuProvider = provider
+}
+
+// collectCostMetrics collects cost metrics for the scaler.
+func (a *AutoScaler) collectCostMetrics(ctx context.Context, scaler *scalerv1alpha1.BudAIScaler, currentReplicas int32) *types.CostMetrics {
+	costConfig := scaler.Spec.CostConfig
+	if costConfig == nil || !costConfig.Enabled {
+		return nil
+	}
+
+	provider := cost.CloudProvider(costConfig.CloudProvider)
+	if provider == "" {
+		provider = cost.AWS // Default to AWS if not specified
+	}
+	calculator, ok := a.costCalculators[provider]
+	if !ok {
+		klog.InfoS("Cost calculator not found for provider", "provider", provider)
+		return nil
+	}
+
+	// For now, use a default instance type - this could be detected from node labels
+	instanceType := "g5.xlarge" // Default GPU instance
+	isSpot := costConfig.PreferSpotInstances
+
+	hourlyCost, err := calculator.CalculateHourlyCost(ctx, instanceType, currentReplicas, isSpot)
+	if err != nil {
+		klog.InfoS("Failed to calculate hourly cost", "error", err)
+		return nil
+	}
+
+	budgetPerHour := 0.0
+	if costConfig.BudgetPerHour != nil {
+		budgetPerHour = costConfig.BudgetPerHour.AsApproximateFloat64()
+	}
+
+	klog.V(4).InfoS("Cost metrics calculated",
+		"provider", provider,
+		"replicas", currentReplicas,
+		"hourlyCost", hourlyCost,
+		"budgetPerHour", budgetPerHour,
+		"perReplicaCost", hourlyCost/float64(currentReplicas))
+
+	return &types.CostMetrics{
+		CurrentCostPerHour:    hourlyCost,
+		BudgetPerHour:         budgetPerHour,
+		PerReplicaCostPerHour: hourlyCost / float64(currentReplicas),
+	}
+}
+
+// loadScheduleHints loads schedule hints from the scaler spec into the predictor.
+// This is independent of prediction config and allows schedule hints to work standalone.
+func (a *AutoScaler) loadScheduleHints(scaler *scalerv1alpha1.BudAIScaler) {
+	for _, hint := range scaler.Spec.ScheduleHints {
+		a.predictor.AddScheduleHint(prediction.ScheduleHint{
+			Name:           hint.Name,
+			CronExpression: hint.CronExpression,
+			Duration:       hint.Duration.Duration,
+			TargetReplicas: hint.TargetReplicas,
+		})
+	}
+}
+
+// getScheduleHintData returns prediction data based only on schedule hints.
+// Used when prediction is disabled but schedule hints are defined.
+func (a *AutoScaler) getScheduleHintData(scaler *scalerv1alpha1.BudAIScaler) *types.PredictionData {
+	activeHint := a.predictor.GetActiveScheduleHint(time.Now())
+	if activeHint == nil {
+		return nil
+	}
+
+	klog.InfoS("Active schedule hint (standalone mode)",
+		"scaler", scaler.Name,
+		"hint", activeHint.Name,
+		"targetReplicas", activeHint.TargetReplicas)
+
+	return &types.PredictionData{
+		PredictedReplicas: activeHint.TargetReplicas,
+		Confidence:        1.0, // Schedule hints have 100% confidence
+		Reason:            fmt.Sprintf("schedule hint: %s", activeHint.Name),
+	}
+}
+
+// getPredictionData gets prediction data for the scaler.
+func (a *AutoScaler) getPredictionData(ctx context.Context, scaler *scalerv1alpha1.BudAIScaler, metricSnapshots map[string]*types.MetricSnapshot) *types.PredictionData {
+	predConfig := scaler.Spec.PredictionConfig
+	if predConfig == nil || !predConfig.Enabled {
+		return nil
+	}
+
+	// Record current metrics for prediction
+	for metric, snapshot := range metricSnapshots {
+		if snapshot != nil {
+			a.predictor.RecordMetric(metric, snapshot.Average, snapshot.Timestamp)
+		}
+	}
+
+	// Get the primary metric for prediction
+	if len(scaler.Spec.MetricsSources) == 0 {
+		return nil
+	}
+
+	primaryMetricSource := scaler.Spec.MetricsSources[0]
+	primaryMetric := primaryMetricSource.TargetMetric
+
+	// Parse target value from metric source
+	targetValue := 50.0 // Default fallback
+	if primaryMetricSource.TargetValue != "" {
+		if parsed, err := strconv.ParseFloat(primaryMetricSource.TargetValue, 64); err == nil {
+			targetValue = parsed
+		}
+	}
+
+	result := a.predictor.PredictReplicas(
+		ctx,
+		primaryMetric,
+		scaler.Status.ActualScale,
+		targetValue,
+		scaler.Spec.GetMinReplicas(),
+		scaler.Spec.MaxReplicas,
+	)
+
+	// Check if there's an active schedule hint
+	if result.ScheduleHint != nil {
+		klog.InfoS("Active schedule hint",
+			"name", result.ScheduleHint.Name,
+			"targetReplicas", result.ScheduleHint.TargetReplicas)
+	}
+
+	return &types.PredictionData{
+		PredictedReplicas: result.RecommendedReplicas,
+		Confidence:        result.Confidence,
+		Reason:            result.Reason,
+	}
 }
 
 // GetAggregator returns the metric aggregator.
@@ -259,4 +468,178 @@ func (a *AutoScaler) RecordScalingDecision(
 	}
 
 	return decision
+}
+
+// getLearningSystem returns or creates the learning system for a scaler.
+func (a *AutoScaler) getLearningSystem(ctx context.Context, scaler *scalerv1alpha1.BudAIScaler) *learning.LearningSystem {
+	key := scaler.Namespace + "/" + scaler.Name
+	if ls, exists := a.learningSystems[key]; exists {
+		return ls
+	}
+
+	// Create owner reference for automatic cleanup
+	ownerRef := learning.CreateOwnerReference(
+		scaler.Name,
+		string(scaler.UID),
+		scalerv1alpha1.GroupVersion.String(),
+		"BudAIScaler",
+	)
+
+	ls := learning.NewLearningSystem(a.client, scaler.Name, scaler.Namespace, ownerRef)
+
+	// Initialize from stored data
+	if err := ls.Initialize(ctx); err != nil {
+		klog.V(4).InfoS("Failed to initialize learning system from storage", "error", err, "scaler", scaler.Name)
+	}
+
+	// Configure based on scaler spec
+	if scaler.Spec.PredictionConfig != nil {
+		if scaler.Spec.PredictionConfig.LookAheadMinutes != nil {
+			ls.SetLookAhead(time.Duration(*scaler.Spec.PredictionConfig.LookAheadMinutes) * time.Minute)
+		}
+		if scaler.Spec.PredictionConfig.HistoricalDataDays != nil {
+			ls.SetHistoricalDays(int(*scaler.Spec.PredictionConfig.HistoricalDataDays))
+		}
+		ls.SetEnabled(scaler.Spec.PredictionConfig.EnableLearning)
+	}
+
+	a.learningSystems[key] = ls
+	return ls
+}
+
+// recordLearningFeedback records scaling decision feedback for learning.
+func (a *AutoScaler) recordLearningFeedback(
+	ctx context.Context,
+	scaler *scalerv1alpha1.BudAIScaler,
+	request algorithm.ScalingRequest,
+	result *ScaleResult,
+	metricSnapshots map[string]*types.MetricSnapshot,
+) {
+	ls := a.getLearningSystem(ctx, scaler)
+	if ls == nil || !ls.IsEnabled() {
+		return
+	}
+
+	// Extract metric values from snapshots
+	metricValues := make(map[string]float64)
+	for name, snapshot := range metricSnapshots {
+		if snapshot != nil {
+			metricValues[name] = snapshot.Average
+		}
+	}
+
+	// Build LLM metrics
+	llmMetrics := learning.LLMMetrics{}
+	if request.GPUMetrics != nil {
+		llmMetrics.GPUMemoryUtilization = request.GPUMetrics.MemoryUtilization
+		llmMetrics.GPUComputeUtilization = request.GPUMetrics.ComputeUtilization
+	}
+
+	// Extract LLM-specific metrics from snapshots
+	if snapshot, ok := metricSnapshots["vllm:gpu_cache_usage_perc"]; ok && snapshot != nil {
+		llmMetrics.GPUCacheUsage = snapshot.Average / 100.0 // Normalize to 0-1
+	}
+	if snapshot, ok := metricSnapshots["vllm:num_requests_waiting"]; ok && snapshot != nil {
+		llmMetrics.RequestsWaiting = snapshot.Average
+	}
+	if snapshot, ok := metricSnapshots["vllm:num_requests_running"]; ok && snapshot != nil {
+		llmMetrics.RequestsRunning = snapshot.Average
+	}
+	if snapshot, ok := metricSnapshots["vllm:avg_generation_throughput_toks_per_s"]; ok && snapshot != nil {
+		llmMetrics.TokenThroughput = snapshot.Average
+	}
+
+	// Get predicted replicas if available
+	predictedReplicas := result.DesiredReplicas
+	if request.PredictionData != nil {
+		predictedReplicas = request.PredictionData.PredictedReplicas
+	}
+
+	// Get look-ahead minutes
+	lookAheadMinutes := 15 // default
+	if scaler.Spec.PredictionConfig != nil && scaler.Spec.PredictionConfig.LookAheadMinutes != nil {
+		lookAheadMinutes = int(*scaler.Spec.PredictionConfig.LookAheadMinutes)
+	}
+
+	// Record the scaling decision
+	ls.RecordScalingDecision(ctx, learning.FeedbackInput{
+		ScalerName:          scaler.Name,
+		Namespace:           scaler.Namespace,
+		Timestamp:           time.Now(),
+		CurrentReplicas:     request.CurrentReplicas,
+		RecommendedReplicas: result.DesiredReplicas,
+		PredictedReplicas:   predictedReplicas,
+		MetricSnapshots:     metricValues,
+		LLMMetrics:          llmMetrics,
+		LookAheadMinutes:    lookAheadMinutes,
+	})
+
+	klog.V(4).InfoS("Recorded learning feedback",
+		"scaler", scaler.Name,
+		"currentReplicas", request.CurrentReplicas,
+		"recommendedReplicas", result.DesiredReplicas,
+		"predictedReplicas", predictedReplicas)
+}
+
+// VerifyLearningPredictions verifies past predictions against actual outcomes.
+func (a *AutoScaler) VerifyLearningPredictions(ctx context.Context, scaler *scalerv1alpha1.BudAIScaler) {
+	ls := a.getLearningSystem(ctx, scaler)
+	if ls == nil || !ls.IsEnabled() {
+		return
+	}
+
+	ls.VerifyPastPredictions(ctx, scaler.Status.ActualScale)
+}
+
+// PersistLearningData persists learning data if needed.
+func (a *AutoScaler) PersistLearningData(ctx context.Context, scaler *scalerv1alpha1.BudAIScaler) error {
+	ls := a.getLearningSystem(ctx, scaler)
+	if ls == nil || !ls.IsEnabled() {
+		return nil
+	}
+
+	if ls.ShouldPersist() {
+		return ls.Persist(ctx)
+	}
+	return nil
+}
+
+// GetLearningStatus returns the learning status for a scaler.
+func (a *AutoScaler) GetLearningStatus(ctx context.Context, scaler *scalerv1alpha1.BudAIScaler) *learning.LearningSystemStatus {
+	ls := a.getLearningSystem(ctx, scaler)
+	if ls == nil {
+		return nil
+	}
+
+	status := ls.GetStatus()
+	return &status
+}
+
+// GetSeasonalAdjustment returns the seasonal adjustment for predictions.
+func (a *AutoScaler) GetSeasonalAdjustment(ctx context.Context, scaler *scalerv1alpha1.BudAIScaler, metric string) (factor float64, confidence float64) {
+	ls := a.getLearningSystem(ctx, scaler)
+	if ls == nil || !ls.IsEnabled() {
+		return 1.0, 0.0
+	}
+
+	return ls.GetSeasonalFactor(metric, time.Now())
+}
+
+// GetPatternAdjustment returns the pattern-based adjustment for predictions.
+func (a *AutoScaler) GetPatternAdjustment(ctx context.Context, scaler *scalerv1alpha1.BudAIScaler, llmMetrics learning.LLMMetrics) *learning.PatternAdjustment {
+	ls := a.getLearningSystem(ctx, scaler)
+	if ls == nil || !ls.IsEnabled() {
+		return nil
+	}
+
+	// Detect current pattern
+	ls.DetectPattern(llmMetrics)
+
+	return ls.GetPatternAdjustment()
+}
+
+// CleanupLearningSystem removes the learning system for a deleted scaler.
+func (a *AutoScaler) CleanupLearningSystem(scaler *scalerv1alpha1.BudAIScaler) {
+	key := scaler.Namespace + "/" + scaler.Name
+	delete(a.learningSystems, key)
 }

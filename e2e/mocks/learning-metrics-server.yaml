@@ -1,0 +1,317 @@
+---
+# Mock metrics server for learning E2E test
+# Simulates realistic LLM workload patterns:
+# - Time-of-day variations
+# - KV cache pressure events
+# - Batch ingestion spikes
+# - Traffic patterns
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: learning-metrics-config
+  namespace: llm-test
+data:
+  metrics.py: |
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import os
+    import threading
+    import time
+    import math
+    import random
+
+    class MetricsState:
+        # Base metrics
+        gpu_cache_usage = 50.0
+        num_requests_running = 10
+        num_requests_waiting = 2
+        token_throughput = 100.0
+        gpu_memory_util = 60.0
+        gpu_compute_util = 50.0
+
+        # Simulation state
+        pattern_mode = "normal"  # normal, kv_pressure, batch_spike, traffic_drain
+        pattern_start = time.time()
+        pattern_duration = 60  # seconds
+
+        # Time tracking for seasonal simulation
+        simulated_hour = 10  # Start at 10 AM
+        simulated_day = 1    # Start on Monday
+
+        lock = threading.Lock()
+
+        @classmethod
+        def get_seasonal_factor(cls):
+            """Simulate time-of-day patterns"""
+            hour = cls.simulated_hour
+            # Peak hours: 9-11 AM and 2-5 PM
+            if 9 <= hour <= 11:
+                return 1.5  # Morning peak
+            elif 14 <= hour <= 17:
+                return 1.8  # Afternoon peak
+            elif 23 <= hour or hour <= 6:
+                return 0.3  # Night low
+            else:
+                return 1.0  # Normal
+
+        @classmethod
+        def update_metrics(cls):
+            """Update metrics based on current pattern and time"""
+            base_factor = cls.get_seasonal_factor()
+
+            if cls.pattern_mode == "normal":
+                # Normal operation with seasonal variation
+                cls.gpu_cache_usage = 40 + 20 * base_factor + random.uniform(-5, 5)
+                cls.num_requests_running = int(8 * base_factor + random.randint(-2, 2))
+                cls.num_requests_waiting = int(2 * base_factor + random.randint(0, 3))
+                cls.token_throughput = 80 * base_factor + random.uniform(-10, 10)
+                cls.gpu_memory_util = 50 + 15 * base_factor + random.uniform(-5, 5)
+                cls.gpu_compute_util = 40 + 20 * base_factor + random.uniform(-5, 5)
+
+            elif cls.pattern_mode == "kv_pressure":
+                # KV cache pressure - high cache usage, requests waiting
+                cls.gpu_cache_usage = 85 + random.uniform(0, 10)
+                cls.num_requests_running = int(20 + random.randint(-3, 3))
+                cls.num_requests_waiting = int(15 + random.randint(-2, 5))
+                cls.token_throughput = 60 + random.uniform(-10, 10)  # Degraded
+                cls.gpu_memory_util = 90 + random.uniform(-5, 5)
+                cls.gpu_compute_util = 85 + random.uniform(-5, 5)
+
+            elif cls.pattern_mode == "batch_spike":
+                # Batch ingestion - sudden spike in requests
+                elapsed = time.time() - cls.pattern_start
+                spike_factor = 2.5 if elapsed < cls.pattern_duration / 2 else 1.5
+                cls.gpu_cache_usage = 60 + 15 * spike_factor + random.uniform(-5, 5)
+                cls.num_requests_running = int(15 * spike_factor + random.randint(-2, 3))
+                cls.num_requests_waiting = int(8 * spike_factor + random.randint(-1, 3))
+                cls.token_throughput = 70 * spike_factor + random.uniform(-10, 10)
+                cls.gpu_memory_util = 60 + 15 * spike_factor + random.uniform(-5, 5)
+                cls.gpu_compute_util = 50 + 20 * spike_factor + random.uniform(-5, 5)
+
+            elif cls.pattern_mode == "traffic_drain":
+                # Traffic draining - decreasing load
+                elapsed = time.time() - cls.pattern_start
+                drain_factor = max(0.2, 1.0 - elapsed / cls.pattern_duration)
+                cls.gpu_cache_usage = 50 * drain_factor + random.uniform(-5, 5)
+                cls.num_requests_running = int(10 * drain_factor + random.randint(-1, 1))
+                cls.num_requests_waiting = max(0, int(2 * drain_factor + random.randint(-1, 1)))
+                cls.token_throughput = 80 * drain_factor + random.uniform(-5, 5)
+                cls.gpu_memory_util = 55 * drain_factor + random.uniform(-5, 5)
+                cls.gpu_compute_util = 45 * drain_factor + random.uniform(-5, 5)
+
+            # Clamp values
+            cls.gpu_cache_usage = max(0, min(100, cls.gpu_cache_usage))
+            cls.num_requests_running = max(0, cls.num_requests_running)
+            cls.num_requests_waiting = max(0, cls.num_requests_waiting)
+            cls.token_throughput = max(0, cls.token_throughput)
+            cls.gpu_memory_util = max(0, min(100, cls.gpu_memory_util))
+            cls.gpu_compute_util = max(0, min(100, cls.gpu_compute_util))
+
+    class MetricsHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/metrics':
+                with MetricsState.lock:
+                    MetricsState.update_metrics()
+                    lines = [
+                        '# HELP vllm_gpu_cache_usage_perc GPU KV-cache usage percentage',
+                        '# TYPE vllm_gpu_cache_usage_perc gauge',
+                        f'vllm_gpu_cache_usage_perc{{model_name="mock-model"}} {MetricsState.gpu_cache_usage:.2f}',
+                        '',
+                        '# HELP vllm_num_requests_running Number of requests currently running',
+                        '# TYPE vllm_num_requests_running gauge',
+                        f'vllm_num_requests_running{{model_name="mock-model"}} {MetricsState.num_requests_running}',
+                        '',
+                        '# HELP vllm_num_requests_waiting Number of requests waiting in queue',
+                        '# TYPE vllm_num_requests_waiting gauge',
+                        f'vllm_num_requests_waiting{{model_name="mock-model"}} {MetricsState.num_requests_waiting}',
+                        '',
+                        '# HELP vllm_avg_generation_throughput_toks_per_s Token generation throughput',
+                        '# TYPE vllm_avg_generation_throughput_toks_per_s gauge',
+                        f'vllm_avg_generation_throughput_toks_per_s{{model_name="mock-model"}} {MetricsState.token_throughput:.2f}',
+                        '',
+                        '# HELP gpu_memory_utilization GPU memory utilization percentage',
+                        '# TYPE gpu_memory_utilization gauge',
+                        f'gpu_memory_utilization{{gpu="0"}} {MetricsState.gpu_memory_util:.2f}',
+                        '',
+                        '# HELP gpu_compute_utilization GPU compute utilization percentage',
+                        '# TYPE gpu_compute_utilization gauge',
+                        f'gpu_compute_utilization{{gpu="0"}} {MetricsState.gpu_compute_util:.2f}',
+                    ]
+                    metrics = '\n'.join(lines) + '\n'
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(metrics.encode())
+
+            elif self.path == '/health' or self.path == '/ready':
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'OK')
+
+            elif self.path == '/status':
+                with MetricsState.lock:
+                    status = {
+                        'pattern_mode': MetricsState.pattern_mode,
+                        'simulated_hour': MetricsState.simulated_hour,
+                        'simulated_day': MetricsState.simulated_day,
+                        'gpu_cache_usage': MetricsState.gpu_cache_usage,
+                        'requests_running': MetricsState.num_requests_running,
+                        'requests_waiting': MetricsState.num_requests_waiting,
+                    }
+                import json
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(status).encode())
+
+            elif self.path.startswith('/set_pattern'):
+                try:
+                    params = {}
+                    if '?' in self.path:
+                        query = self.path.split('?')[1]
+                        for param in query.split('&'):
+                            key, value = param.split('=')
+                            params[key] = value
+
+                    with MetricsState.lock:
+                        if 'mode' in params:
+                            MetricsState.pattern_mode = params['mode']
+                            MetricsState.pattern_start = time.time()
+                        if 'duration' in params:
+                            MetricsState.pattern_duration = int(params['duration'])
+
+                    self.send_response(200)
+                    self.end_headers()
+                    response = f'Pattern set to: {MetricsState.pattern_mode} for {MetricsState.pattern_duration}s'
+                    self.wfile.write(response.encode())
+                except Exception as e:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(str(e).encode())
+
+            elif self.path.startswith('/set_time'):
+                try:
+                    params = {}
+                    if '?' in self.path:
+                        query = self.path.split('?')[1]
+                        for param in query.split('&'):
+                            key, value = param.split('=')
+                            params[key] = value
+
+                    with MetricsState.lock:
+                        if 'hour' in params:
+                            MetricsState.simulated_hour = int(params['hour']) % 24
+                        if 'day' in params:
+                            MetricsState.simulated_day = int(params['day']) % 7
+
+                    self.send_response(200)
+                    self.end_headers()
+                    response = f'Simulated time: hour={MetricsState.simulated_hour}, day={MetricsState.simulated_day}'
+                    self.wfile.write(response.encode())
+                except Exception as e:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(str(e).encode())
+
+            elif self.path.startswith('/set'):
+                # Direct metric setting for testing
+                try:
+                    params = {}
+                    if '?' in self.path:
+                        query = self.path.split('?')[1]
+                        for param in query.split('&'):
+                            key, value = param.split('=')
+                            params[key] = value
+
+                    with MetricsState.lock:
+                        MetricsState.pattern_mode = "manual"
+                        if 'gpu_cache' in params:
+                            MetricsState.gpu_cache_usage = float(params['gpu_cache'])
+                        if 'requests_running' in params:
+                            MetricsState.num_requests_running = int(params['requests_running'])
+                        if 'requests_waiting' in params:
+                            MetricsState.num_requests_waiting = int(params['requests_waiting'])
+
+                    self.send_response(200)
+                    self.end_headers()
+                    response = f'Metrics updated: gpu_cache={MetricsState.gpu_cache_usage}, running={MetricsState.num_requests_running}, waiting={MetricsState.num_requests_waiting}'
+                    self.wfile.write(response.encode())
+                except Exception as e:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(str(e).encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):
+            print(f"[{time.strftime('%H:%M:%S')}] {format % args}")
+
+    if __name__ == '__main__':
+        server = HTTPServer(('0.0.0.0', 8000), MetricsHandler)
+        print('Mock learning metrics server running on port 8000')
+        print('Endpoints:')
+        print('  /metrics - Prometheus metrics')
+        print('  /status - Current state')
+        print('  /set_pattern?mode=<mode>&duration=<seconds>')
+        print('    modes: normal, kv_pressure, batch_spike, traffic_drain')
+        print('  /set_time?hour=<0-23>&day=<0-6>')
+        print('  /set?gpu_cache=<0-100>&requests_running=<n>&requests_waiting=<n>')
+        server.serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: learning-metrics-server
+  namespace: llm-test
+  labels:
+    app: learning-metrics-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: learning-metrics-server
+  template:
+    metadata:
+      labels:
+        app: learning-metrics-server
+    spec:
+      containers:
+        - name: metrics-server
+          image: python:3.11-slim
+          command: ["/bin/sh", "-c", "apt-get update && apt-get install -y curl && python3 /app/metrics.py"]
+          ports:
+            - containerPort: 8000
+              name: metrics
+          volumeMounts:
+            - name: metrics-script
+              mountPath: /app
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: metrics-script
+          configMap:
+            name: learning-metrics-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: learning-metrics-server
+  namespace: llm-test
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: metrics
+  selector:
+    app: learning-metrics-server

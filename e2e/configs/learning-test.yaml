@@ -1,0 +1,44 @@
+---
+# E2E Test for Adaptive Learning System
+# This test verifies that the learning system:
+# 1. Collects metric data correctly
+# 2. Learns seasonal patterns
+# 3. Detects LLM-specific patterns (KV cache pressure, batch ingestion)
+# 4. Improves prediction accuracy over time
+# 5. Persists learning data to ConfigMap
+
+apiVersion: scaler.bud.studio/v1alpha1
+kind: BudAIScaler
+metadata:
+  name: learning-scaler
+  namespace: llm-test
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llm-inference-sim
+  minReplicas: 1
+  maxReplicas: 10
+  scalingStrategy: BudScaler
+  metricsSources:
+    - metricSourceType: pod
+      targetMetric: "vllm:gpu_cache_usage_perc"
+      targetValue: "70"
+      path: /metrics
+      port: "8000"
+  # Enable GPU config for LLM pattern detection
+  gpuConfig:
+    enabled: true
+    gpuMemoryThreshold: 80
+    gpuComputeThreshold: 80
+  # Prediction with learning enabled
+  predictionConfig:
+    enabled: true
+    lookAheadMinutes: 5        # Short for testing
+    historicalDataDays: 7
+    enableLearning: true       # Enable adaptive learning
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 30
+    scaleUp:
+      stabilizationWindowSeconds: 10

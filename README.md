@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/BudEcosystem/scaler)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-**BudAIScaler** is a Kubernetes autoscaler designed for GenAI workloads. It provides intelligent scaling with GPU awareness, cost optimization, and predictive capabilities.
+**BudAIScaler** is a Kubernetes autoscaler designed for GenAI workloads. It provides intelligent scaling with GPU awareness, cost optimization, adaptive learning, and predictive capabilities.
 
 ## Features
 
@@ -24,12 +24,75 @@
 - **Prometheus** - Direct PromQL queries
 - **Inference Engines** - Native support for vLLM, TGI, SGLang, Triton
 
-### Advanced Capabilities
+### Adaptive Learning System
 
-- **GPU-Aware Scaling** - Scale based on GPU memory/compute utilization
-- **Cost-Aware Scaling** - Budget constraints, spot instance preference
-- **Predictive Scaling** - Time-series forecasting, schedule hints
-- **Multi-Cluster Support** - Federated scaling across clusters
+The BudAIScaler includes an adaptive learning system that improves scaling decisions over time:
+
+- **Pattern Detection** - Automatically detects workload patterns (KV cache pressure, batch spikes, traffic drains)
+- **Seasonal Learning** - Learns time-of-day and day-of-week traffic patterns
+- **Prediction Accuracy Tracking** - Monitors MAE, MAPE, and direction accuracy
+- **Self-Calibration** - Automatically adjusts model parameters based on prediction errors
+- **Persistent Learning** - Stores learned data in ConfigMaps for recovery across restarts
+
+### Schedule Hints
+
+Define known traffic patterns for deterministic schedule-based scaling:
+
+```yaml
+spec:
+  scheduleHints:
+    - name: morning-rush
+      cronExpression: "0 9 * * 1-5"
+      targetReplicas: 5
+      duration: 2h
+    - name: batch-processing
+      cronExpression: "0 2 * * *"
+      targetReplicas: 10
+      duration: 1h
+```
+
+### GPU-Aware Scaling
+
+Scale based on GPU memory and compute utilization:
+
+```yaml
+spec:
+  gpuConfig:
+    enabled: true
+    gpuMemoryThreshold: 80
+    gpuComputeThreshold: 70
+    metricsSource: dcgm  # dcgm, nvml, or prometheus
+    dcgmEndpoint: "http://dcgm-exporter:9400/metrics"
+```
+
+### Cost-Aware Scaling
+
+Optimize scaling decisions based on cost constraints:
+
+```yaml
+spec:
+  costConfig:
+    enabled: true
+    cloudProvider: aws
+    budgetPerHour: "10.00"
+    budgetPerDay: "200.00"
+    preferSpotInstances: true
+    spotFallbackToOnDemand: true
+```
+
+### Predictive Scaling
+
+ML-based prediction for proactive scaling:
+
+```yaml
+spec:
+  predictionConfig:
+    enabled: true
+    lookAheadMinutes: 15
+    historicalDataDays: 7
+    enableLearning: true
+    minConfidence: 0.7
+```
 
 ## Quick Start
 
@@ -44,9 +107,6 @@
 #### Using Helm (Recommended)
 
 ```bash
-# Add the Helm repository (coming soon)
-# helm repo add budecosystem https://budecosystem.github.io/scaler
-
 # Install from local chart
 helm install scaler charts/scaler \
   --namespace scaler-system \
@@ -65,6 +125,8 @@ kubectl apply -k config/default
 
 ### Create a BudAIScaler
 
+#### Basic Example
+
 ```yaml
 apiVersion: scaler.bud.studio/v1alpha1
 kind: BudAIScaler
@@ -79,13 +141,77 @@ spec:
   maxReplicas: 10
   scalingStrategy: BudScaler
   metricsSources:
-    - metricSourceType: resource
-      targetMetric: cpu
-      targetValue: "80"
+    - metricSourceType: inferenceEngine
+      targetMetric: gpu_cache_usage_perc
+      targetValue: "70"
+      inferenceEngineConfig:
+        engineType: vllm
+        metricsPort: 8000
 ```
 
-```bash
-kubectl apply -f my-scaler.yaml
+#### Full-Featured Example
+
+```yaml
+apiVersion: scaler.bud.studio/v1alpha1
+kind: BudAIScaler
+metadata:
+  name: llm-scaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llm-inference
+  minReplicas: 2
+  maxReplicas: 20
+  scalingStrategy: BudScaler
+
+  metricsSources:
+    - metricSourceType: inferenceEngine
+      targetMetric: gpu_cache_usage_perc
+      targetValue: "70"
+      inferenceEngineConfig:
+        engineType: vllm
+        metricsPort: 8000
+
+  # Schedule-based scaling hints
+  scheduleHints:
+    - name: business-hours
+      cronExpression: "0 9 * * 1-5"
+      targetReplicas: 8
+      duration: 10h
+
+  # Adaptive learning and prediction
+  predictionConfig:
+    enabled: true
+    lookAheadMinutes: 15
+    enableLearning: true
+    minConfidence: 0.7
+
+  # GPU awareness
+  gpuConfig:
+    enabled: true
+    gpuMemoryThreshold: 80
+
+  # Cost constraints
+  costConfig:
+    enabled: true
+    budgetPerHour: "50.00"
+    preferSpotInstances: true
+
+  # Scaling behavior
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
 ```
 
 ## Configuration
@@ -120,9 +246,9 @@ spec:
       path: "/metrics"
   behavior:
     scaleUp:
-      stabilizationWindowSeconds: 0    # React immediately
+      stabilizationWindowSeconds: 0
     scaleDown:
-      stabilizationWindowSeconds: 300  # 5 min cooldown
+      stabilizationWindowSeconds: 300
 ```
 
 #### BudScaler Strategy
@@ -168,46 +294,30 @@ metricsSources:
       metricsPort: 8080
 ```
 
-### GPU-Aware Scaling
-
-```yaml
-spec:
-  gpuConfig:
-    enabled: true
-    gpuMemoryThreshold: 80      # Scale up when GPU memory > 80%
-    gpuComputeThreshold: 70     # Scale up when GPU compute > 70%
-    topologyAware: true         # Consider GPU topology
-    preferredGPUType: nvidia-a100
-```
-
-### Cost-Aware Scaling
-
-```yaml
-spec:
-  costConfig:
-    enabled: true
-    cloudProvider: aws          # aws, gcp, azure
-    budgetPerHour: "10.00"      # Max $10/hour
-    budgetPerDay: "200.00"      # Max $200/day
-    preferSpotInstances: true
-    spotFallbackToOnDemand: true
-```
-
-### Predictive Scaling
+### Adaptive Learning Configuration
 
 ```yaml
 spec:
   predictionConfig:
     enabled: true
+    enableLearning: true
     lookAheadMinutes: 15
     historicalDataDays: 7
-    enableLearning: true
-    scheduleHints:
-      - name: morning-rush
-        cronExpression: "0 9 * * 1-5"
-        targetReplicas: 5
-        duration: 2h
+    minConfidence: 0.7
+    maxPredictedReplicas: 20
 ```
+
+The learning system tracks:
+
+| Metric | Description |
+|--------|-------------|
+| `dataPointsCollected` | Total data points for learning |
+| `detectedPattern` | Current workload pattern (normal, kv_pressure, batch_spike) |
+| `patternConfidence` | Confidence in detected pattern (0-1) |
+| `directionAccuracy` | Accuracy of scale up/down predictions |
+| `overallAccuracy` | Overall prediction accuracy |
+| `recentMAE` | Mean Absolute Error of recent predictions |
+| `recentMAPE` | Mean Absolute Percentage Error |
 
 ### Prometheus Metrics
 
@@ -223,23 +333,32 @@ metricsSources:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      BudAIScaler Controller                      │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │   Metrics   │  │  Algorithms │  │    Scaling Context      │  │
-│  │  Collector  │  │             │  │  (Single Source of      │  │
-│  │             │  │  - HPA      │  │   Truth for Config)     │  │
-│  │  - Pod      │  │  - KPA      │  │                         │  │
-│  │  - Resource │  │  - BudScaler│  │  - Replica bounds       │  │
-│  │  - Prometheus│ │             │  │  - Scaling rates        │  │
-│  │  - External │  │             │  │  - Time windows         │  │
-│  │  - vLLM/TGI │  │             │  │  - GPU/Cost/Prediction  │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
-├─────────────────────────────────────────────────────────────────┤
-│                        Metric Aggregation                        │
-│           (Stable Window: 180s, Panic Window: 60s)              │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                      BudAIScaler Controller                          │
+├─────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌───────────────────────────────┐│
+│  │   Metrics   │  │  Algorithms │  │      Scaling Context          ││
+│  │  Collector  │  │             │  │  (Single Source of Truth)     ││
+│  │             │  │  - HPA      │  │                               ││
+│  │  - Pod      │  │  - KPA      │  │  - Replica bounds             ││
+│  │  - Resource │  │  - BudScaler│  │  - Scaling rates              ││
+│  │  - Prometheus│ │             │  │  - Time windows               ││
+│  │  - External │  │             │  │  - GPU/Cost/Prediction config ││
+│  │  - vLLM/TGI │  │             │  │                               ││
+│  └─────────────┘  └─────────────┘  └───────────────────────────────┘│
+├─────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────────────────────┐│
+│  │                    Adaptive Learning System                      ││
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ ││
+│  │  │   Pattern    │ │  Prediction  │ │     Calibration          │ ││
+│  │  │  Detection   │ │   Accuracy   │ │     System               │ ││
+│  │  │              │ │   Tracker    │ │                          │ ││
+│  │  │ - KV Cache   │ │ - MAE/MAPE   │ │ - Auto-adjusts params    │ ││
+│  │  │ - Batch Spike│ │ - Direction  │ │ - Improves over time     │ ││
+│  │  │ - Seasonal   │ │ - Overall    │ │ - ConfigMap persistence  │ ││
+│  │  └──────────────┘ └──────────────┘ └──────────────────────────┘ ││
+│  └─────────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
               ┌───────────────────────────────┐
@@ -256,7 +375,26 @@ See the [config/samples](config/samples/) directory for complete examples:
 - `scaler_v1alpha1_budaiscaler_kpa.yaml` - KPA strategy
 - `scaler_v1alpha1_budaiscaler_vllm.yaml` - vLLM scaling
 - `scaler_v1alpha1_budaiscaler_tgi.yaml` - TGI scaling
-- `scaler_v1alpha1_budaiscaler_full.yaml` - Full configuration
+- `scaler_v1alpha1_budaiscaler_full.yaml` - Full configuration with all features
+
+## E2E Testing
+
+End-to-end tests are available in the `e2e/` directory:
+
+```bash
+cd e2e/scripts
+
+# Run scaling test (~3 min)
+./scaling-test.sh run
+
+# Run learning system test (~5 min)
+./learning-test.sh run
+
+# Run prediction accuracy test (~8 min)
+./accuracy-test.sh run --quick
+```
+
+See [e2e/README.md](e2e/README.md) for detailed test documentation.
 
 ## Helm Chart Configuration
 
@@ -287,54 +425,91 @@ See [charts/scaler/values.yaml](charts/scaler/values.yaml) for all options.
 
 ```bash
 # Build the controller
-go build -o bin/manager cmd/controller/main.go
+make build
 
 # Build Docker image
-docker build -t scaler-controller:latest .
+make docker-build
 
 # Run tests
-go test ./...
+make test
 ```
 
 ### Run Locally
 
 ```bash
 # Install CRDs
-kubectl apply -k config/crd
+make install
 
 # Run controller locally
-go run cmd/controller/main.go
+make run
 ```
 
 ### Project Structure
 
 ```
 scaler/
-├── api/scaler/v1alpha1/     # CRD types
-├── cmd/controller/          # Entry point
+├── api/scaler/v1alpha1/          # CRD types
+├── cmd/controller/               # Entry point
 ├── config/
-│   ├── crd/                 # CRD manifests
-│   ├── rbac/                # RBAC configuration
-│   ├── manager/             # Controller deployment
-│   └── samples/             # Example BudAIScalers
-├── charts/scaler/           # Helm chart
+│   ├── crd/                      # CRD manifests
+│   ├── rbac/                     # RBAC configuration
+│   ├── manager/                  # Controller deployment
+│   └── samples/                  # Example BudAIScalers
+├── charts/scaler/                # Helm chart
+├── e2e/                          # End-to-end tests
+│   ├── configs/                  # Test configurations
+│   ├── mocks/                    # Mock servers
+│   └── scripts/                  # Test scripts
 └── pkg/
-    ├── algorithm/           # Scaling algorithms
-    ├── aggregation/         # Metric aggregation
-    ├── context/             # ScalingContext
-    ├── controller/          # Reconciler
-    ├── metrics/             # Metric fetchers
-    └── types/               # Core types
+    ├── controller/
+    │   └── budaiscaler/          # BudAIScaler controller
+    │       ├── algorithm/        # Scaling algorithms
+    │       ├── prediction/       # ML prediction
+    │       ├── learning/         # Adaptive learning system
+    │       └── cost/             # Cost calculations
+    ├── context/                  # ScalingContext
+    ├── metrics/                  # Metric fetchers
+    ├── gpu/                      # GPU metrics provider
+    └── types/                    # Core types
 ```
 
 ## Roadmap
 
-- [x] Phase 1: Core autoscaling (HPA, KPA, BudScaler)
-- [x] Phase 2: Extended metrics (Prometheus, vLLM, TGI)
-- [ ] Phase 3: GPU-aware scaling implementation
-- [ ] Phase 4: Cost-aware scaling implementation
-- [ ] Phase 5: Predictive scaling implementation
-- [ ] Phase 6: Multi-cluster support
+- [x] **Phase 1: Core Autoscaling**
+  - [x] HPA strategy (K8s HPA wrapper)
+  - [x] KPA strategy (panic/stable windows)
+  - [x] BudScaler strategy (GenAI-optimized)
+  - [x] Metric aggregation with time windows
+  - [x] ScalingContext as single source of truth
+- [x] **Phase 2: Extended Metrics**
+  - [x] Pod HTTP endpoint metrics
+  - [x] Kubernetes resource metrics (CPU/memory)
+  - [x] Prometheus/PromQL integration
+  - [x] vLLM metrics support
+  - [x] TGI metrics support
+- [x] **Phase 3: Adaptive Learning**
+  - [x] Pattern detection (KV cache, batch spikes)
+  - [x] Seasonal pattern learning
+  - [x] Prediction accuracy tracking
+  - [x] Self-calibration system
+  - [x] ConfigMap persistence
+- [x] **Phase 4: Schedule Hints**
+  - [x] Cron-based schedule definitions
+  - [x] Independent of prediction config
+  - [x] Duration-based activation
+- [ ] **Phase 5: GPU-Aware Scaling**
+  - [x] GPU metrics provider (DCGM, NVML, Prometheus)
+  - [x] GPU memory/compute thresholds
+  - [ ] GPU topology awareness
+  - [ ] Multi-GPU support
+- [ ] **Phase 6: Cost-Aware Scaling**
+  - [x] Cost calculator implementation
+  - [x] Budget constraints (hourly, daily)
+  - [ ] Cloud pricing integration (AWS, GCP, Azure)
+  - [ ] Spot instance optimization
+- [ ] **Phase 7: Multi-Cluster Support**
+  - [ ] Cross-cluster metrics aggregation
+  - [ ] Federated scaling decisions
 
 ## Contributing
 
