@@ -15,9 +15,6 @@ jobs:
       contents: read
       packages: write
 
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,7 +29,8 @@ jobs:
       - name: Set image name (lowercase)
         id: image
         run: |
-          echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+          IMAGE_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -77,8 +75,10 @@ jobs:
       - name: Set registry names (lowercase)
         id: registry
         run: |
-          echo "helm_registry=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
-          echo "image_name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "owner=${OWNER}" >> $GITHUB_OUTPUT
+          echo "repo=${REPO}" >> $GITHUB_OUTPUT
 
       - name: Log in to Helm Registry
         run: |
@@ -95,16 +95,14 @@ jobs:
         run: |
           sed -i "s/^version:.*/version: ${{ steps.version.outputs.version }}/" charts/scaler/Chart.yaml
           sed -i "s/^appVersion:.*/appVersion: \"${{ steps.version.outputs.version }}\"/" charts/scaler/Chart.yaml
-          echo "Updated Chart.yaml:"
+          echo "=== Updated Chart.yaml ==="
           cat charts/scaler/Chart.yaml
 
       - name: Update image repository and tag in values.yaml
         run: |
-          # Update repository to match GHCR path
-          sed -i "s|repository:.*|repository: ${{ env.REGISTRY }}/${{ steps.registry.outputs.image_name }}|" charts/scaler/values.yaml
-          # Update tag - handle both empty and quoted values
+          sed -i "s|repository:.*|repository: ${{ env.REGISTRY }}/${{ steps.registry.outputs.repo }}|" charts/scaler/values.yaml
           sed -i "s/tag:.*/tag: \"${{ steps.version.outputs.version }}\"/" charts/scaler/values.yaml
-          echo "Updated values.yaml:"
+          echo "=== Updated values.yaml ==="
           head -15 charts/scaler/values.yaml
 
       - name: Sync CRDs to Helm chart
@@ -121,7 +119,7 @@ jobs:
 
       - name: Push Helm chart to GHCR
         run: |
-          helm push scaler-${{ steps.version.outputs.version }}.tgz oci://${{ env.REGISTRY }}/${{ steps.registry.outputs.helm_registry }}/charts
+          helm push scaler-${{ steps.version.outputs.version }}.tgz oci://${{ env.REGISTRY }}/${{ steps.registry.outputs.owner }}/charts
 
       - name: Upload Helm chart to release
         uses: softprops/action-gh-release@v2
@@ -139,8 +137,10 @@ jobs:
       - name: Set registry names (lowercase)
         id: registry
         run: |
-          echo "helm_registry=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
-          echo "image_name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "owner=${OWNER}" >> $GITHUB_OUTPUT
+          echo "repo=${REPO}" >> $GITHUB_OUTPUT
 
       - name: Get release version
         id: version
@@ -162,7 +162,7 @@ jobs:
             ### Using Helm (OCI Registry)
 
             ```bash
-            helm install scaler oci://ghcr.io/${{ steps.registry.outputs.helm_registry }}/charts/scaler \
+            helm install scaler oci://ghcr.io/${{ steps.registry.outputs.owner }}/charts/scaler \
               --version ${{ steps.version.outputs.version }} \
               --namespace scaler-system \
               --create-namespace
@@ -171,5 +171,5 @@ jobs:
             ### Using Docker Image
 
             ```bash
-            docker pull ghcr.io/${{ steps.registry.outputs.image_name }}:${{ steps.version.outputs.version }}
+            docker pull ghcr.io/${{ steps.registry.outputs.repo }}:${{ steps.version.outputs.version }}
             ```
