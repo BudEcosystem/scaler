@@ -121,10 +121,14 @@ The prediction system is fully generic - you can use any metrics from your `metr
 #### Using Helm (Recommended)
 
 ```bash
-# Install from local chart
-helm install scaler charts/scaler \
+# Install from OCI registry
+helm install scaler oci://ghcr.io/budecosystem/charts/scaler \
   --namespace scaler-system \
   --create-namespace
+
+# Verify installation
+kubectl get pods -n scaler-system
+kubectl get crd budaiscalers.scaler.bud.studio
 ```
 
 #### Using Kustomize
@@ -135,6 +139,19 @@ kubectl apply -k config/crd
 
 # Install controller
 kubectl apply -k config/default
+```
+
+#### From Source
+
+```bash
+# Clone the repository
+git clone https://github.com/BudEcosystem/scaler.git
+cd scaler
+
+# Install using local chart
+helm install scaler charts/scaler \
+  --namespace scaler-system \
+  --create-namespace
 ```
 
 ### Create a BudAIScaler
@@ -431,6 +448,19 @@ See [e2e/README.md](e2e/README.md) for detailed test documentation.
 
 ## Helm Chart Configuration
 
+**Chart Location:** `oci://ghcr.io/budecosystem/charts/scaler`
+
+```bash
+# Install specific version
+helm install scaler oci://ghcr.io/budecosystem/charts/scaler --version 0.1.0
+
+# Upgrade
+helm upgrade scaler oci://ghcr.io/budecosystem/charts/scaler
+
+# Uninstall
+helm uninstall scaler -n scaler-system
+```
+
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `replicaCount` | Controller replicas | `1` |
@@ -475,38 +505,6 @@ make install
 
 # Run controller locally
 make run
-```
-
-### Project Structure
-
-```
-scaler/
-├── api/scaler/v1alpha1/          # CRD types
-├── cmd/controller/               # Entry point
-├── config/
-│   ├── crd/                      # CRD manifests
-│   ├── rbac/                     # RBAC configuration
-│   ├── manager/                  # Controller deployment
-│   └── samples/                  # Example BudAIScalers
-├── charts/scaler/                # Helm chart
-├── docs/                         # Documentation
-│   ├── prediction-algorithm.md   # Prediction system details
-│   └── scaling-hierarchy.md      # Scaling decision priority
-├── e2e/                          # End-to-end tests
-│   ├── configs/                  # Test configurations
-│   ├── mocks/                    # Mock servers
-│   └── scripts/                  # Test scripts
-└── pkg/
-    ├── controller/
-    │   └── budaiscaler/          # BudAIScaler controller
-    │       ├── algorithm/        # Scaling algorithms
-    │       ├── prediction/       # ML prediction
-    │       ├── learning/         # Adaptive learning system
-    │       └── cost/             # Cost calculations
-    ├── context/                  # ScalingContext
-    ├── metrics/                  # Metric fetchers
-    ├── gpu/                      # GPU metrics provider
-    └── types/                    # Core types
 ```
 
 ## Roadmap
