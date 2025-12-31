@@ -125,6 +125,44 @@ spec:
                         maximum: 3600
                         minimum: 0
                         type: integer
+                      startingPods:
+                        description: |-
+                          StartingPods configures how starting (not-ready) pods affect scale-up decisions.
+                          This helps prevent over-scaling when pods have long startup times.
+                          Only applicable for ScaleUp rules.
+                        properties:
+                          bypassGateOnPanic:
+                            description: |-
+                              BypassGateOnPanic allows scale-up even when gate is active if the
+                              algorithm is in panic mode (metrics severely above threshold).
+                              Default: false (important for LLM workloads with long cold starts)
+                            type: boolean
+                          maxStartingPodPercent:
+                            description: |-
+                              MaxStartingPodPercent is the maximum percentage of total pods that can
+                              be in starting state before gating scale-up.
+                              Set to 0 to disable. Default: 0 (disabled)
+                            format: int32
+                            maximum: 100
+                            minimum: 0
+                            type: integer
+                          maxStartingPods:
+                            description: |-
+                              MaxStartingPods is the maximum number of starting pods allowed before
+                              gating further scale-up operations. Set to 0 to disable the gate.
+                              Default: 0 (disabled)
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          startingPodWeight:
+                            description: |-
+                              StartingPodWeight is the weight (0.0-1.0) to assign to starting pods
+                              when calculating effective capacity.
+                              0.0 = ignore starting pods completely
+                              1.0 = count starting pods as fully ready
+                              Default: 0.5 (count each starting pod as 50% capacity)
+                            type: string
+                        type: object
                       tolerance:
                         description: |-
                           Tolerance is the threshold for metric fluctuations before scaling.
@@ -189,6 +227,44 @@ spec:
                         maximum: 3600
                         minimum: 0
                         type: integer
+                      startingPods:
+                        description: |-
+                          StartingPods configures how starting (not-ready) pods affect scale-up decisions.
+                          This helps prevent over-scaling when pods have long startup times.
+                          Only applicable for ScaleUp rules.
+                        properties:
+                          bypassGateOnPanic:
+                            description: |-
+                              BypassGateOnPanic allows scale-up even when gate is active if the
+                              algorithm is in panic mode (metrics severely above threshold).
+                              Default: false (important for LLM workloads with long cold starts)
+                            type: boolean
+                          maxStartingPodPercent:
+                            description: |-
+                              MaxStartingPodPercent is the maximum percentage of total pods that can
+                              be in starting state before gating scale-up.
+                              Set to 0 to disable. Default: 0 (disabled)
+                            format: int32
+                            maximum: 100
+                            minimum: 0
+                            type: integer
+                          maxStartingPods:
+                            description: |-
+                              MaxStartingPods is the maximum number of starting pods allowed before
+                              gating further scale-up operations. Set to 0 to disable the gate.
+                              Default: 0 (disabled)
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          startingPodWeight:
+                            description: |-
+                              StartingPodWeight is the weight (0.0-1.0) to assign to starting pods
+                              when calculating effective capacity.
+                              0.0 = ignore starting pods completely
+                              1.0 = count starting pods as fully ready
+                              Default: 0.5 (count each starting pod as 50% capacity)
+                            type: string
+                        type: object
                       tolerance:
                         description: |-
                           Tolerance is the threshold for metric fluctuations before scaling.

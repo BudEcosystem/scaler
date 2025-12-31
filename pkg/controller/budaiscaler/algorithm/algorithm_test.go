@@ -38,6 +38,11 @@ type mockScalingContext struct {
 	scaleDownPolicies      []scalerv1alpha1.ScalingPolicy
 	scaleUpSelectPolicy    scalerv1alpha1.ScalingPolicySelect
 	scaleDownSelectPolicy  scalerv1alpha1.ScalingPolicySelect
+	// Starting pods config
+	startingPodWeight     float64
+	maxStartingPods       int32
+	maxStartingPodPercent int32
+	bypassGateOnPanic     bool
 }
 
 func (m *mockScalingContext) GetMinReplicas() int32                 { return m.minReplicas }
@@ -64,6 +69,10 @@ func (m *mockScalingContext) GetScaleUpSelectPolicy() scalerv1alpha1.ScalingPoli
 func (m *mockScalingContext) GetScaleDownSelectPolicy() scalerv1alpha1.ScalingPolicySelect {
 	return m.scaleDownSelectPolicy
 }
+func (m *mockScalingContext) GetStartingPodWeight() float64   { return m.startingPodWeight }
+func (m *mockScalingContext) GetMaxStartingPods() int32       { return m.maxStartingPods }
+func (m *mockScalingContext) GetMaxStartingPodPercent() int32 { return m.maxStartingPodPercent }
+func (m *mockScalingContext) GetBypassGateOnPanic() bool      { return m.bypassGateOnPanic }
 
 func TestApplyScaleUpPolicies(t *testing.T) {
 	tests := []struct {
@@ -306,6 +315,177 @@ func TestCalculatePolicyLimit(t *testing.T) {
 			result := calculatePolicyLimit(tt.currentReplicas, tt.policy, tt.isScaleUp)
 			if result != tt.expected {
 				t.Errorf("calculatePolicyLimit() = %d, want %d", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCalculateEffectiveReplicas(t *testing.T) {
+	tests := []struct {
+		name              string
+		readyPods         int32
+		startingPods      int32
+		startingPodWeight float64
+		expected          float64
+	}{
+		{
+			name:              "no starting pods",
+			readyPods:         5,
+			startingPods:      0,
+			startingPodWeight: 0.5,
+			expected:          5.0,
+		},
+		{
+			name:              "all starting pods",
+			readyPods:         0,
+			startingPods:      4,
+			startingPodWeight: 0.5,
+			expected:          2.0, // 0 + 0.5 * 4 = 2
+		},
+		{
+			name:              "mixed pods with 50% weight",
+			readyPods:         3,
+			startingPods:      2,
+			startingPodWeight: 0.5,
+			expected:          4.0, // 3 + 0.5 * 2 = 4
+		},
+		{
+			name:              "mixed pods with 100% weight",
+			readyPods:         3,
+			startingPods:      2,
+			startingPodWeight: 1.0,
+			expected:          5.0, // 3 + 1.0 * 2 = 5
+		},
+		{
+			name:              "mixed pods with 0% weight",
+			readyPods:         3,
+			startingPods:      2,
+			startingPodWeight: 0.0,
+			expected:          3.0, // 3 + 0.0 * 2 = 3
+		},
+		{
+			name:              "mixed pods with 75% weight",
+			readyPods:         4,
+			startingPods:      4,
+			startingPodWeight: 0.75,
+			expected:          7.0, // 4 + 0.75 * 4 = 7
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := CalculateEffectiveReplicas(tt.readyPods, tt.startingPods, tt.startingPodWeight)
+			if result != tt.expected {
+				t.Errorf("CalculateEffectiveReplicas() = %f, want %f", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestShouldGateScaleUp(t *testing.T) {
+	tests := []struct {
+		name                  string
+		readyPods             int32
+		startingPods          int32
+		maxStartingPods       int32
+		maxStartingPodPercent int32
+		expected              bool
+	}{
+		{
+			name:                  "gate disabled - both limits 0",
+			readyPods:             5,
+			startingPods:          3,
+			maxStartingPods:       0,
+			maxStartingPodPercent: 0,
+			expected:              false,
+		},
+		{
+			name:                  "under absolute limit",
+			readyPods:             5,
+			startingPods:          2,
+			maxStartingPods:       3,
+			maxStartingPodPercent: 0,
+			expected:              false,
+		},
+		{
+			name:                  "at absolute limit - gate",
+			readyPods:             5,
+			startingPods:          3,
+			maxStartingPods:       3,
+			maxStartingPodPercent: 0,
+			expected:              true,
+		},
+		{
+			name:                  "above absolute limit - gate",
+			readyPods:             5,
+			startingPods:          5,
+			maxStartingPods:       3,
+			maxStartingPodPercent: 0,
+			expected:              true,
+		},
+		{
+			name:                  "under percent limit",
+			readyPods:             8,
+			startingPods:          2,
+			maxStartingPods:       0,
+			maxStartingPodPercent: 30,
+			expected:              false, // 2/10 = 20% < 30%
+		},
+		{
+			name:                  "at percent limit - gate",
+			readyPods:             7,
+			startingPods:          3,
+			maxStartingPods:       0,
+			maxStartingPodPercent: 30,
+			expected:              true, // 3/10 = 30% >= 30%
+		},
+		{
+			name:                  "above percent limit - gate",
+			readyPods:             5,
+			startingPods:          5,
+			maxStartingPods:       0,
+			maxStartingPodPercent: 30,
+			expected:              true, // 5/10 = 50% > 30%
+		},
+		{
+			name:                  "both limits - under both",
+			readyPods:             8,
+			startingPods:          2,
+			maxStartingPods:       5,
+			maxStartingPodPercent: 50,
+			expected:              false, // 2 < 5 and 20% < 50%
+		},
+		{
+			name:                  "both limits - over absolute",
+			readyPods:             7,
+			startingPods:          3,
+			maxStartingPods:       2,
+			maxStartingPodPercent: 50,
+			expected:              true, // 3 >= 2
+		},
+		{
+			name:                  "both limits - over percent",
+			readyPods:             2,
+			startingPods:          3,
+			maxStartingPods:       10,
+			maxStartingPodPercent: 50,
+			expected:              true, // 3/5 = 60% >= 50%
+		},
+		{
+			name:                  "no starting pods - never gate",
+			readyPods:             5,
+			startingPods:          0,
+			maxStartingPods:       1,
+			maxStartingPodPercent: 10,
+			expected:              false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ShouldGateScaleUp(tt.readyPods, tt.startingPods, tt.maxStartingPods, tt.maxStartingPodPercent)
+			if result != tt.expected {
+				t.Errorf("ShouldGateScaleUp() = %v, want %v", result, tt.expected)
 			}
 		})
 	}

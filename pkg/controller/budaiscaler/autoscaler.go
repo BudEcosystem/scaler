@@ -131,14 +131,22 @@ func (a *AutoScaler) Scale(ctx context.Context, scaler *scalerv1alpha1.BudAIScal
 	scalingCtx := scalercontext.NewScalingContextFromScaler(scaler)
 
 	// Build scaling request
+	readyPodCount := a.countReadyPods(pods)
+	startingPodCount := a.countStartingPods(pods)
+
 	request := algorithm.ScalingRequest{
-		Scaler:          scaler,
-		CurrentReplicas: scale.Spec.Replicas,
-		DesiredReplicas: scale.Spec.Replicas,
-		ReadyPodCount:   a.countReadyPods(pods),
-		MetricSnapshots: metricSnapshots,
-		ScalingContext:  scalingCtx,
+		Scaler:           scaler,
+		CurrentReplicas:  scale.Spec.Replicas,
+		DesiredReplicas:  scale.Spec.Replicas,
+		ReadyPodCount:    readyPodCount,
+		StartingPodCount: startingPodCount,
+		MetricSnapshots:  metricSnapshots,
+		ScalingContext:   scalingCtx,
 	}
+
+	klog.V(4).InfoS("Pod counts", "scaler", scaler.Name,
+		"readyPods", readyPodCount, "startingPods", startingPodCount,
+		"totalRunning", len(pods), "desiredReplicas", scale.Spec.Replicas)
 
 	// Get last scale time from status
 	if scaler.Status.LastScaleTime != nil {
@@ -251,6 +259,20 @@ func (a *AutoScaler) countReadyPods(pods []corev1.Pod) int32 {
 	var count int32
 	for _, pod := range pods {
 		if isPodReady(&pod) {
+			count++
+		}
+	}
+	return count
+}
+
+// countStartingPods counts pods that are running but not yet ready.
+// These are pods that have been scheduled and started but haven't passed
+// their readiness checks yet - typically still initializing (e.g., loading models).
+func (a *AutoScaler) countStartingPods(pods []corev1.Pod) int32 {
+	var count int32
+	for _, pod := range pods {
+		if !isPodReady(&pod) {
+			// Pod is running (from getPods filter) but not ready = starting
 			count++
 		}
 	}

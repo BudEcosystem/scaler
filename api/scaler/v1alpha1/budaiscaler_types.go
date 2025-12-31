@@ -455,6 +455,39 @@ type ScalingPolicy struct {
 	PeriodSeconds int32 `json:"periodSeconds"`
 }
 
+// StartingPodsConfig configures how starting (not-ready) pods affect scaling decisions.
+// This helps prevent over-scaling when pods are slow to become ready.
+type StartingPodsConfig struct {
+	// StartingPodWeight is the weight (0.0-1.0) to assign to starting pods
+	// when calculating effective capacity.
+	// 0.0 = ignore starting pods completely
+	// 1.0 = count starting pods as fully ready
+	// Default: 0.5 (count each starting pod as 50% capacity)
+	// +optional
+	StartingPodWeight *string `json:"startingPodWeight,omitempty"`
+
+	// MaxStartingPods is the maximum number of starting pods allowed before
+	// gating further scale-up operations. Set to 0 to disable the gate.
+	// Default: 0 (disabled)
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	MaxStartingPods *int32 `json:"maxStartingPods,omitempty"`
+
+	// MaxStartingPodPercent is the maximum percentage of total pods that can
+	// be in starting state before gating scale-up.
+	// Set to 0 to disable. Default: 0 (disabled)
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	MaxStartingPodPercent *int32 `json:"maxStartingPodPercent,omitempty"`
+
+	// BypassGateOnPanic allows scale-up even when gate is active if the
+	// algorithm is in panic mode (metrics severely above threshold).
+	// Default: false (important for LLM workloads with long cold starts)
+	// +optional
+	BypassGateOnPanic *bool `json:"bypassGateOnPanic,omitempty"`
+}
+
 // ScalingRules defines rules for scaling in a particular direction.
 type ScalingRules struct {
 	// StabilizationWindowSeconds is the number of seconds to look back
@@ -483,6 +516,12 @@ type ScalingRules struct {
 	// For example, 0.1 means 10% fluctuation is tolerated.
 	// +optional
 	Tolerance *string `json:"tolerance,omitempty"`
+
+	// StartingPods configures how starting (not-ready) pods affect scale-up decisions.
+	// This helps prevent over-scaling when pods have long startup times.
+	// Only applicable for ScaleUp rules.
+	// +optional
+	StartingPods *StartingPodsConfig `json:"startingPods,omitempty"`
 }
 
 // BudAIScalerStatus defines the observed state of BudAIScaler.

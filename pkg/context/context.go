@@ -106,6 +106,12 @@ type ScalingContext interface {
 	GetScaleDownPolicies() []scalerv1alpha1.ScalingPolicy
 	GetScaleUpSelectPolicy() scalerv1alpha1.ScalingPolicySelect
 	GetScaleDownSelectPolicy() scalerv1alpha1.ScalingPolicySelect
+
+	// Starting pods configuration
+	GetStartingPodWeight() float64
+	GetMaxStartingPods() int32
+	GetMaxStartingPodPercent() int32
+	GetBypassGateOnPanic() bool
 }
 
 // baseScalingContext is the default implementation of ScalingContext.
@@ -160,6 +166,12 @@ type baseScalingContext struct {
 	scaleDownPolicies     []scalerv1alpha1.ScalingPolicy
 	scaleUpSelectPolicy   scalerv1alpha1.ScalingPolicySelect
 	scaleDownSelectPolicy scalerv1alpha1.ScalingPolicySelect
+
+	// Starting pods configuration
+	startingPodWeight     float64
+	maxStartingPods       int32
+	maxStartingPodPercent int32
+	bypassGateOnPanic     bool
 }
 
 // NewBaseScalingContext creates a new ScalingContext with default values.
@@ -192,6 +204,11 @@ func NewBaseScalingContext() ScalingContext {
 		scaleDownPolicies:        nil,
 		scaleUpSelectPolicy:      scalerv1alpha1.MaxChangePolicySelect,
 		scaleDownSelectPolicy:    scalerv1alpha1.MinChangePolicySelect,
+		// Starting pods defaults
+		startingPodWeight:     0.5,   // Count starting pods as 50% capacity
+		maxStartingPods:       0,     // Disabled by default
+		maxStartingPodPercent: 0,     // Disabled by default
+		bypassGateOnPanic:     false, // Don't bypass gate on panic (important for LLM workloads)
 	}
 }
 
@@ -225,6 +242,24 @@ func NewScalingContextFromScaler(scaler *scalerv1alpha1.BudAIScaler) ScalingCont
 			}
 			if scaler.Spec.Behavior.ScaleUp.SelectPolicy != nil {
 				ctx.scaleUpSelectPolicy = *scaler.Spec.Behavior.ScaleUp.SelectPolicy
+			}
+			// Parse starting pods configuration
+			if scaler.Spec.Behavior.ScaleUp.StartingPods != nil {
+				sp := scaler.Spec.Behavior.ScaleUp.StartingPods
+				if sp.StartingPodWeight != nil {
+					if weight, err := strconv.ParseFloat(*sp.StartingPodWeight, 64); err == nil {
+						ctx.startingPodWeight = weight
+					}
+				}
+				if sp.MaxStartingPods != nil {
+					ctx.maxStartingPods = *sp.MaxStartingPods
+				}
+				if sp.MaxStartingPodPercent != nil {
+					ctx.maxStartingPodPercent = *sp.MaxStartingPodPercent
+				}
+				if sp.BypassGateOnPanic != nil {
+					ctx.bypassGateOnPanic = *sp.BypassGateOnPanic
+				}
 			}
 		}
 		if scaler.Spec.Behavior.ScaleDown != nil {
@@ -450,3 +485,9 @@ func (c *baseScalingContext) GetScaleUpSelectPolicy() scalerv1alpha1.ScalingPoli
 func (c *baseScalingContext) GetScaleDownSelectPolicy() scalerv1alpha1.ScalingPolicySelect {
 	return c.scaleDownSelectPolicy
 }
+
+// Starting pods configuration implementation
+func (c *baseScalingContext) GetStartingPodWeight() float64   { return c.startingPodWeight }
+func (c *baseScalingContext) GetMaxStartingPods() int32       { return c.maxStartingPods }
+func (c *baseScalingContext) GetMaxStartingPodPercent() int32 { return c.maxStartingPodPercent }
+func (c *baseScalingContext) GetBypassGateOnPanic() bool      { return c.bypassGateOnPanic }

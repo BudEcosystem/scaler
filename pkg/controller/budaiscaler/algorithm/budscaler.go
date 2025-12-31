@@ -155,6 +155,27 @@ func (a *BudScalerAlgorithm) ComputeRecommendation(ctx context.Context, request 
 		rec.DesiredReplicas = ApplyScaleDownPolicies(request.CurrentReplicas, rec.DesiredReplicas, sctx)
 	}
 
+	// Step 7.5: Apply starting pods gate (prevent scale-up if too many pods starting)
+	if rec.DesiredReplicas > request.CurrentReplicas {
+		maxStartingPods := sctx.GetMaxStartingPods()
+		maxStartingPodPercent := sctx.GetMaxStartingPodPercent()
+		bypassOnPanic := sctx.GetBypassGateOnPanic()
+
+		// Check if gate should apply (bypass if in panic mode and configured to do so)
+		shouldApplyGate := !bypassOnPanic || !rec.InPanicMode
+
+		if shouldApplyGate && ShouldGateScaleUp(request.ReadyPodCount, request.StartingPodCount, maxStartingPods, maxStartingPodPercent) {
+			klog.V(4).InfoS("Scale-up gated due to starting pods",
+				"startingPods", request.StartingPodCount,
+				"readyPods", request.ReadyPodCount,
+				"maxStartingPods", maxStartingPods,
+				"maxStartingPodPercent", maxStartingPodPercent,
+				"desiredReplicas", rec.DesiredReplicas,
+				"currentReplicas", request.CurrentReplicas)
+			rec.DesiredReplicas = request.CurrentReplicas
+		}
+	}
+
 	// Step 8: Apply stabilization
 	rec.DesiredReplicas = a.applyStabilization(rec.DesiredReplicas, request, sctx)
 
@@ -168,6 +189,30 @@ func (a *BudScalerAlgorithm) ComputeRecommendation(ctx context.Context, request 
 func (a *BudScalerAlgorithm) calculateMetricBasedRecommendation(request ScalingRequest, sctx ScalingContextProvider) (int32, error) {
 	var maxDesired int32 = 0
 
+	// Calculate effective replicas considering starting pods.
+	// This helps prevent over-scaling when pods are still starting.
+	startingPodWeight := sctx.GetStartingPodWeight()
+	effectiveReplicas := CalculateEffectiveReplicas(
+		request.ReadyPodCount,
+		request.StartingPodCount,
+		startingPodWeight,
+	)
+
+	// Use effective replicas as baseline for scale-up calculations.
+	// This treats starting pods as partial capacity already committed.
+	baselineReplicas := int32(math.Ceil(effectiveReplicas))
+	if baselineReplicas < 1 {
+		baselineReplicas = 1
+	}
+
+	klog.V(5).InfoS("Effective capacity calculation",
+		"readyPods", request.ReadyPodCount,
+		"startingPods", request.StartingPodCount,
+		"startingPodWeight", startingPodWeight,
+		"effectiveReplicas", effectiveReplicas,
+		"baselineReplicas", baselineReplicas,
+		"currentReplicas", request.CurrentReplicas)
+
 	for _, source := range request.Scaler.Spec.MetricsSources {
 		snapshot, exists := request.MetricSnapshots[source.TargetMetric]
 		if !exists || snapshot == nil {
@@ -180,12 +225,35 @@ func (a *BudScalerAlgorithm) calculateMetricBasedRecommendation(request ScalingR
 		}
 
 		currentValue := snapshot.Average
-		if currentValue <= 0 || targetValue <= 0 {
+		if targetValue <= 0 {
 			continue
 		}
 
+		// Handle zero/near-zero metric value: scale to minimum
+		// This indicates no load, so we should scale down aggressively
+		if currentValue <= 0 {
+			klog.V(4).InfoS("Metric value is zero, recommending minReplicas",
+				"metric", source.TargetMetric,
+				"currentValue", currentValue,
+				"minReplicas", sctx.GetMinReplicas())
+			// Use minReplicas as the desired, but still track it for comparison
+			if sctx.GetMinReplicas() > maxDesired {
+				maxDesired = sctx.GetMinReplicas()
+			}
+			continue
+		}
+
+		// For scale-up decisions, use effective replicas as baseline
+		// to account for capacity already "paid for" but not yet ready
+		replicasForCalc := request.CurrentReplicas
+		ratio := currentValue / targetValue
+		if ratio > 1.0 && baselineReplicas > request.CurrentReplicas {
+			// When scaling up and we have starting pods, use effective capacity
+			replicasForCalc = baselineReplicas
+		}
+
 		// Calculate desired replicas with BudScaler-specific logic
-		desired := a.calculateDesiredForMetric(currentValue, targetValue, request.CurrentReplicas, sctx)
+		desired := a.calculateDesiredForMetric(currentValue, targetValue, replicasForCalc, sctx)
 
 		if desired > maxDesired {
 			maxDesired = desired
@@ -223,7 +291,18 @@ func (a *BudScalerAlgorithm) calculateDesiredForMetric(currentValue, targetValue
 	}
 
 	desiredFloat := float64(currentReplicas) * (1 + alpha*(ratio-1))
-	desired := int32(math.Ceil(desiredFloat))
+
+	// Use different rounding for scale-up vs scale-down
+	// Scale-up: use Ceil to ensure we have enough capacity
+	// Scale-down: use Round to allow more gradual scale-down (enables 2→1)
+	var desired int32
+	if ratio > 1.0 {
+		desired = int32(math.Ceil(desiredFloat))
+	} else {
+		// For scale-down, use Round instead of Ceil to allow reaching minReplicas
+		// This allows 1.25 to round to 1 instead of ceiling to 2
+		desired = int32(math.Round(desiredFloat))
+	}
 
 	// Apply rate limits
 	if desired > currentReplicas {

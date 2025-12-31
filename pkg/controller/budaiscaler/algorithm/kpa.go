@@ -107,6 +107,7 @@ func (a *KPAAlgorithm) ComputeRecommendation(ctx context.Context, request Scalin
 			targetValue,
 			request.CurrentReplicas,
 			request.ReadyPodCount,
+			request.StartingPodCount,
 			sctx,
 		)
 
@@ -134,6 +135,27 @@ func (a *KPAAlgorithm) ComputeRecommendation(ctx context.Context, request Scalin
 		rec.DesiredReplicas = ApplyScaleUpPolicies(request.CurrentReplicas, rec.DesiredReplicas, sctx)
 	} else if rec.DesiredReplicas < request.CurrentReplicas {
 		rec.DesiredReplicas = ApplyScaleDownPolicies(request.CurrentReplicas, rec.DesiredReplicas, sctx)
+	}
+
+	// Apply starting pods gate (prevent scale-up if too many pods starting)
+	if rec.DesiredReplicas > request.CurrentReplicas {
+		maxStartingPods := sctx.GetMaxStartingPods()
+		maxStartingPodPercent := sctx.GetMaxStartingPodPercent()
+		bypassOnPanic := sctx.GetBypassGateOnPanic()
+
+		// Check if gate should apply (bypass if in panic mode and configured to do so)
+		shouldApplyGate := !bypassOnPanic || !inPanicMode
+
+		if shouldApplyGate && ShouldGateScaleUp(request.ReadyPodCount, request.StartingPodCount, maxStartingPods, maxStartingPodPercent) {
+			klog.V(4).InfoS("KPA: Scale-up gated due to starting pods",
+				"startingPods", request.StartingPodCount,
+				"readyPods", request.ReadyPodCount,
+				"maxStartingPods", maxStartingPods,
+				"maxStartingPodPercent", maxStartingPodPercent,
+				"desiredReplicas", rec.DesiredReplicas,
+				"currentReplicas", request.CurrentReplicas)
+			rec.DesiredReplicas = request.CurrentReplicas
+		}
 	}
 
 	// Apply stabilization
@@ -169,7 +191,7 @@ func (a *KPAAlgorithm) ComputeRecommendation(ctx context.Context, request Scalin
 // calculateDesiredReplicas calculates the desired replica count for a single metric.
 func (a *KPAAlgorithm) calculateDesiredReplicas(
 	currentValue, targetValue float64,
-	currentReplicas, readyPodCount int32,
+	currentReplicas, readyPodCount, startingPodCount int32,
 	sctx ScalingContextProvider,
 ) (int32, bool) {
 	if targetValue <= 0 {
@@ -193,9 +215,31 @@ func (a *KPAAlgorithm) calculateDesiredReplicas(
 		return currentReplicas, false
 	}
 
+	// Calculate effective replicas considering starting pods.
+	// This helps prevent over-scaling when pods are still starting.
+	startingPodWeight := sctx.GetStartingPodWeight()
+	effectiveReplicas := CalculateEffectiveReplicas(readyPodCount, startingPodCount, startingPodWeight)
+	baselineReplicas := int32(math.Ceil(effectiveReplicas))
+	if baselineReplicas < 1 {
+		baselineReplicas = 1
+	}
+
+	// For scale-up decisions, use effective replicas as baseline
+	// to account for capacity already "paid for" but not yet ready
+	replicasForCalc := currentReplicas
+	if ratio > 1.0 && baselineReplicas > currentReplicas {
+		replicasForCalc = baselineReplicas
+		klog.V(5).InfoS("KPA using effective capacity for scale-up",
+			"readyPods", readyPodCount,
+			"startingPods", startingPodCount,
+			"effectiveReplicas", effectiveReplicas,
+			"baselineReplicas", baselineReplicas,
+			"currentReplicas", currentReplicas)
+	}
+
 	// Calculate desired replicas
 	// In KPA, desired = ceil(currentReplicas * ratio)
-	desiredFloat := float64(currentReplicas) * ratio
+	desiredFloat := float64(replicasForCalc) * ratio
 	desired := int32(math.Ceil(desiredFloat))
 
 	// Apply rate limits

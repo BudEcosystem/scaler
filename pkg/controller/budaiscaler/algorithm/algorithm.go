@@ -48,6 +48,10 @@ type ScalingRequest struct {
 	// ReadyPodCount is the number of pods in ready state.
 	ReadyPodCount int32
 
+	// StartingPodCount is the number of pods that are running but not yet ready.
+	// These pods are expected to become ready soon and contribute to capacity.
+	StartingPodCount int32
+
 	// MetricSnapshots contains collected metrics for each source.
 	MetricSnapshots map[string]*types.MetricSnapshot
 
@@ -86,6 +90,11 @@ type ScalingContextProvider interface {
 	GetScaleDownPolicies() []scalerv1alpha1.ScalingPolicy
 	GetScaleUpSelectPolicy() scalerv1alpha1.ScalingPolicySelect
 	GetScaleDownSelectPolicy() scalerv1alpha1.ScalingPolicySelect
+	// Starting pods configuration
+	GetStartingPodWeight() float64
+	GetMaxStartingPods() int32
+	GetMaxStartingPodPercent() int32
+	GetBypassGateOnPanic() bool
 }
 
 // ScalingRecommendation contains the result of a scaling decision.
@@ -296,4 +305,38 @@ func maxInt32Slice(values []int32) int32 {
 		}
 	}
 	return max
+}
+
+// CalculateEffectiveReplicas returns the effective replica count considering
+// starting pods with a configurable weight.
+// Formula: effectiveReplicas = readyPods + (startingPodWeight * startingPods)
+func CalculateEffectiveReplicas(readyPods, startingPods int32, startingPodWeight float64) float64 {
+	return float64(readyPods) + (startingPodWeight * float64(startingPods))
+}
+
+// ShouldGateScaleUp determines if scale-up should be gated due to too many
+// starting pods. Returns true if scale-up should be prevented.
+func ShouldGateScaleUp(readyPods, startingPods, maxStartingPods, maxStartingPodPercent int32) bool {
+	// If both limits are 0, gate is disabled
+	if maxStartingPods == 0 && maxStartingPodPercent == 0 {
+		return false
+	}
+
+	// Check absolute limit
+	if maxStartingPods > 0 && startingPods >= maxStartingPods {
+		return true
+	}
+
+	// Check percentage limit
+	if maxStartingPodPercent > 0 {
+		totalPods := readyPods + startingPods
+		if totalPods > 0 {
+			currentPercent := int32((float64(startingPods) / float64(totalPods)) * 100)
+			if currentPercent >= maxStartingPodPercent {
+				return true
+			}
+		}
+	}
+
+	return false
 }
