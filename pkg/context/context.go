@@ -38,6 +38,12 @@ const (
 	DefaultPanicWindow              = 60 * time.Second
 	DefaultStableWindow             = 180 * time.Second
 	DefaultActivationScale          = int32(1)
+
+	// Starting pods defaults - enabled by default for LLM workloads with long cold starts
+	DefaultStartingPodWeight     = 0.5 // Count starting pods as 50% capacity
+	DefaultMaxStartingPods       = 0   // Disabled (use percent-based instead)
+	DefaultMaxStartingPodPercent = 50  // Gate scale-up if >50% of pods are starting
+	DefaultBypassGateOnPanic     = false
 )
 
 // ScalingContext provides configuration for scaling algorithms.
@@ -204,11 +210,11 @@ func NewBaseScalingContext() ScalingContext {
 		scaleDownPolicies:        nil,
 		scaleUpSelectPolicy:      scalerv1alpha1.MaxChangePolicySelect,
 		scaleDownSelectPolicy:    scalerv1alpha1.MinChangePolicySelect,
-		// Starting pods defaults
-		startingPodWeight:     0.5,   // Count starting pods as 50% capacity
-		maxStartingPods:       0,     // Disabled by default
-		maxStartingPodPercent: 0,     // Disabled by default
-		bypassGateOnPanic:     false, // Don't bypass gate on panic (important for LLM workloads)
+		// Starting pods defaults - enabled by default for LLM workloads
+		startingPodWeight:     DefaultStartingPodWeight,
+		maxStartingPods:       DefaultMaxStartingPods,
+		maxStartingPodPercent: DefaultMaxStartingPodPercent,
+		bypassGateOnPanic:     DefaultBypassGateOnPanic
 	}
 }
 

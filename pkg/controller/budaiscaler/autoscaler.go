@@ -132,7 +132,18 @@ func (a *AutoScaler) Scale(ctx context.Context, scaler *scalerv1alpha1.BudAIScal
 
 	// Build scaling request
 	readyPodCount := a.countReadyPods(pods)
-	startingPodCount := a.countStartingPods(pods)
+	runningNotReadyCount := a.countStartingPods(pods)
+
+	// Count pending pods - these are also "starting" as they represent
+	// capacity that's been requested but not yet available
+	pendingPodCount, err := a.countPendingPods(ctx, scaler, scale)
+	if err != nil {
+		klog.V(4).InfoS("Failed to count pending pods", "scaler", scaler.Name, "error", err)
+		pendingPodCount = 0
+	}
+
+	// Total starting pods = running-but-not-ready + pending
+	startingPodCount := runningNotReadyCount + pendingPodCount
 
 	request := algorithm.ScalingRequest{
 		Scaler:           scaler,
@@ -145,7 +156,8 @@ func (a *AutoScaler) Scale(ctx context.Context, scaler *scalerv1alpha1.BudAIScal
 	}
 
 	klog.V(4).InfoS("Pod counts", "scaler", scaler.Name,
-		"readyPods", readyPodCount, "startingPods", startingPodCount,
+		"readyPods", readyPodCount, "runningNotReady", runningNotReadyCount,
+		"pendingPods", pendingPodCount, "totalStarting", startingPodCount,
 		"totalRunning", len(pods), "desiredReplicas", scale.Spec.Replicas)
 
 	// Get last scale time from status
@@ -277,6 +289,35 @@ func (a *AutoScaler) countStartingPods(pods []corev1.Pod) int32 {
 		}
 	}
 	return count
+}
+
+// countPendingPods counts pods that are in Pending state.
+// These are pods that have been requested but not yet scheduled or started.
+// They represent capacity that's been committed but not yet available.
+func (a *AutoScaler) countPendingPods(ctx context.Context, scaler *scalerv1alpha1.BudAIScaler, scale *Scale) (int32, error) {
+	// Parse selector from scale
+	selector, err := labels.Parse(scale.Status.Selector)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse selector: %w", err)
+	}
+
+	// List all pods matching selector
+	podList := &corev1.PodList{}
+	err = a.client.List(ctx, podList, &client.ListOptions{
+		Namespace:     scaler.Namespace,
+		LabelSelector: selector,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	var count int32
+	for _, pod := range podList.Items {
+		if pod.Status.Phase == corev1.PodPending && pod.DeletionTimestamp == nil {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // isPodReady checks if a pod is ready.

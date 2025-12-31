@@ -467,15 +467,15 @@ type StartingPodsConfig struct {
 	StartingPodWeight *string `json:"startingPodWeight,omitempty"`
 
 	// MaxStartingPods is the maximum number of starting pods allowed before
-	// gating further scale-up operations. Set to 0 to disable the gate.
-	// Default: 0 (disabled)
+	// gating further scale-up operations. Set to 0 to disable this gate.
+	// Default: 0 (disabled, uses MaxStartingPodPercent instead)
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	MaxStartingPods *int32 `json:"maxStartingPods,omitempty"`
 
 	// MaxStartingPodPercent is the maximum percentage of total pods that can
-	// be in starting state before gating scale-up.
-	// Set to 0 to disable. Default: 0 (disabled)
+	// be in starting state before gating scale-up. Set to 0 to disable.
+	// Default: 50 (gate scale-up if more than 50% of pods are starting)
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
