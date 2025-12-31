@@ -72,8 +72,50 @@ spec:
                     properties:
                       maxScaleRate:
                         description: |-
-                          MaxScaleRate is the maximum scaling rate.
+                          MaxScaleRate is the maximum scaling rate (deprecated, use Policies instead).
                           For example, 2.0 means the replica count can double in one step.
+                        type: string
+                      policies:
+                        description: Policies is a list of scaling policies.
+                        items:
+                          description: ScalingPolicy defines a single scaling policy.
+                          properties:
+                            periodSeconds:
+                              description: |-
+                                PeriodSeconds is the time window for this policy.
+                                The policy allows at most Value pods/percent change within this period.
+                              format: int32
+                              maximum: 1800
+                              minimum: 1
+                              type: integer
+                            type:
+                              description: Type specifies the type of scaling policy.
+                              enum:
+                              - Pods
+                              - Percent
+                              type: string
+                            value:
+                              description: |-
+                                Value is the amount to scale.
+                                For Pods type: the number of pods to add/remove.
+                                For Percent type: the percentage of current replicas.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                          required:
+                          - periodSeconds
+                          - type
+                          - value
+                          type: object
+                        type: array
+                      selectPolicy:
+                        description: |-
+                          SelectPolicy determines which policy to use when multiple policies apply.
+                          Defaults to Max for scale-up and Min for scale-down.
+                        enum:
+                        - Max
+                        - Min
+                        - Disabled
                         type: string
                       stabilizationWindowSeconds:
                         description: |-
@@ -94,8 +136,50 @@ spec:
                     properties:
                       maxScaleRate:
                         description: |-
-                          MaxScaleRate is the maximum scaling rate.
+                          MaxScaleRate is the maximum scaling rate (deprecated, use Policies instead).
                           For example, 2.0 means the replica count can double in one step.
+                        type: string
+                      policies:
+                        description: Policies is a list of scaling policies.
+                        items:
+                          description: ScalingPolicy defines a single scaling policy.
+                          properties:
+                            periodSeconds:
+                              description: |-
+                                PeriodSeconds is the time window for this policy.
+                                The policy allows at most Value pods/percent change within this period.
+                              format: int32
+                              maximum: 1800
+                              minimum: 1
+                              type: integer
+                            type:
+                              description: Type specifies the type of scaling policy.
+                              enum:
+                              - Pods
+                              - Percent
+                              type: string
+                            value:
+                              description: |-
+                                Value is the amount to scale.
+                                For Pods type: the number of pods to add/remove.
+                                For Percent type: the percentage of current replicas.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                          required:
+                          - periodSeconds
+                          - type
+                          - value
+                          type: object
+                        type: array
+                      selectPolicy:
+                        description: |-
+                          SelectPolicy determines which policy to use when multiple policies apply.
+                          Defaults to Max for scale-up and Min for scale-down.
+                        enum:
+                        - Max
+                        - Min
+                        - Disabled
                         type: string
                       stabilizationWindowSeconds:
                         description: |-

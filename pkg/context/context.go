@@ -100,6 +100,12 @@ type ScalingContext interface {
 	GetStableWindowSeconds() int32
 	GetScaleUpStabilizationSeconds() int32
 	GetScaleDownStabilizationSeconds() int32
+
+	// Policy configuration
+	GetScaleUpPolicies() []scalerv1alpha1.ScalingPolicy
+	GetScaleDownPolicies() []scalerv1alpha1.ScalingPolicy
+	GetScaleUpSelectPolicy() scalerv1alpha1.ScalingPolicySelect
+	GetScaleDownSelectPolicy() scalerv1alpha1.ScalingPolicySelect
 }
 
 // baseScalingContext is the default implementation of ScalingContext.
@@ -148,6 +154,12 @@ type baseScalingContext struct {
 	// Prediction configuration
 	predictionEnabled bool
 	lookAheadMinutes  int32
+
+	// Policy configuration
+	scaleUpPolicies       []scalerv1alpha1.ScalingPolicy
+	scaleDownPolicies     []scalerv1alpha1.ScalingPolicy
+	scaleUpSelectPolicy   scalerv1alpha1.ScalingPolicySelect
+	scaleDownSelectPolicy scalerv1alpha1.ScalingPolicySelect
 }
 
 // NewBaseScalingContext creates a new ScalingContext with default values.
@@ -176,6 +188,10 @@ func NewBaseScalingContext() ScalingContext {
 		budgetPerDay:             0,
 		predictionEnabled:        false,
 		lookAheadMinutes:         15,
+		scaleUpPolicies:          nil,
+		scaleDownPolicies:        nil,
+		scaleUpSelectPolicy:      scalerv1alpha1.MaxChangePolicySelect,
+		scaleDownSelectPolicy:    scalerv1alpha1.MinChangePolicySelect,
 	}
 }
 
@@ -203,6 +219,13 @@ func NewScalingContextFromScaler(scaler *scalerv1alpha1.BudAIScaler) ScalingCont
 					ctx.upFluctuationTolerance = tol
 				}
 			}
+			// Parse scale-up policies
+			if len(scaler.Spec.Behavior.ScaleUp.Policies) > 0 {
+				ctx.scaleUpPolicies = scaler.Spec.Behavior.ScaleUp.Policies
+			}
+			if scaler.Spec.Behavior.ScaleUp.SelectPolicy != nil {
+				ctx.scaleUpSelectPolicy = *scaler.Spec.Behavior.ScaleUp.SelectPolicy
+			}
 		}
 		if scaler.Spec.Behavior.ScaleDown != nil {
 			if scaler.Spec.Behavior.ScaleDown.StabilizationWindowSeconds != nil {
@@ -217,6 +240,13 @@ func NewScalingContextFromScaler(scaler *scalerv1alpha1.BudAIScaler) ScalingCont
 				if tol, err := strconv.ParseFloat(*scaler.Spec.Behavior.ScaleDown.Tolerance, 64); err == nil {
 					ctx.downFluctuationTolerance = tol
 				}
+			}
+			// Parse scale-down policies
+			if len(scaler.Spec.Behavior.ScaleDown.Policies) > 0 {
+				ctx.scaleDownPolicies = scaler.Spec.Behavior.ScaleDown.Policies
+			}
+			if scaler.Spec.Behavior.ScaleDown.SelectPolicy != nil {
+				ctx.scaleDownSelectPolicy = *scaler.Spec.Behavior.ScaleDown.SelectPolicy
 			}
 		}
 	}
@@ -405,4 +435,18 @@ func (c *baseScalingContext) GetScaleUpStabilizationSeconds() int32 {
 }
 func (c *baseScalingContext) GetScaleDownStabilizationSeconds() int32 {
 	return int32(c.scaleDownCooldownWindow.Seconds())
+}
+
+// Policy configuration implementation
+func (c *baseScalingContext) GetScaleUpPolicies() []scalerv1alpha1.ScalingPolicy {
+	return c.scaleUpPolicies
+}
+func (c *baseScalingContext) GetScaleDownPolicies() []scalerv1alpha1.ScalingPolicy {
+	return c.scaleDownPolicies
+}
+func (c *baseScalingContext) GetScaleUpSelectPolicy() scalerv1alpha1.ScalingPolicySelect {
+	return c.scaleUpSelectPolicy
+}
+func (c *baseScalingContext) GetScaleDownSelectPolicy() scalerv1alpha1.ScalingPolicySelect {
+	return c.scaleDownSelectPolicy
 }

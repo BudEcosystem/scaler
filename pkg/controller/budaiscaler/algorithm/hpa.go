@@ -195,22 +195,41 @@ func (b *HPABuilder) buildBehavior(behavior *scalerv1alpha1.ScalingBehavior) *au
 	hpaBehavior := &autoscalingv2.HorizontalPodAutoscalerBehavior{}
 
 	if behavior.ScaleUp != nil {
-		hpaBehavior.ScaleUp = &autoscalingv2.HPAScalingRules{}
-
-		if behavior.ScaleUp.StabilizationWindowSeconds != nil {
-			hpaBehavior.ScaleUp.StabilizationWindowSeconds = behavior.ScaleUp.StabilizationWindowSeconds
-		}
+		hpaBehavior.ScaleUp = b.buildScalingRules(behavior.ScaleUp)
 	}
 
 	if behavior.ScaleDown != nil {
-		hpaBehavior.ScaleDown = &autoscalingv2.HPAScalingRules{}
-
-		if behavior.ScaleDown.StabilizationWindowSeconds != nil {
-			hpaBehavior.ScaleDown.StabilizationWindowSeconds = behavior.ScaleDown.StabilizationWindowSeconds
-		}
+		hpaBehavior.ScaleDown = b.buildScalingRules(behavior.ScaleDown)
 	}
 
 	return hpaBehavior
+}
+
+// buildScalingRules converts BudAIScaler scaling rules to HPA scaling rules.
+func (b *HPABuilder) buildScalingRules(rules *scalerv1alpha1.ScalingRules) *autoscalingv2.HPAScalingRules {
+	hpaRules := &autoscalingv2.HPAScalingRules{}
+
+	if rules.StabilizationWindowSeconds != nil {
+		hpaRules.StabilizationWindowSeconds = rules.StabilizationWindowSeconds
+	}
+
+	if rules.SelectPolicy != nil {
+		selectPolicy := autoscalingv2.ScalingPolicySelect(*rules.SelectPolicy)
+		hpaRules.SelectPolicy = &selectPolicy
+	}
+
+	if len(rules.Policies) > 0 {
+		hpaRules.Policies = make([]autoscalingv2.HPAScalingPolicy, len(rules.Policies))
+		for i, policy := range rules.Policies {
+			hpaRules.Policies[i] = autoscalingv2.HPAScalingPolicy{
+				Type:          autoscalingv2.HPAScalingPolicyType(policy.Type),
+				Value:         policy.Value,
+				PeriodSeconds: policy.PeriodSeconds,
+			}
+		}
+	}
+
+	return hpaRules
 }
 
 // UpdateHPASpec updates an existing HPA with new spec from BudAIScaler.

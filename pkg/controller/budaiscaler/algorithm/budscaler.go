@@ -148,7 +148,14 @@ func (a *BudScalerAlgorithm) ComputeRecommendation(ctx context.Context, request 
 	// Step 6: Apply min/max constraints
 	rec.DesiredReplicas = a.applyConstraints(costRec, sctx.GetMinReplicas(), sctx.GetMaxReplicas())
 
-	// Step 7: Apply stabilization
+	// Step 7: Apply scaling policies (limit rate of change)
+	if rec.DesiredReplicas > request.CurrentReplicas {
+		rec.DesiredReplicas = ApplyScaleUpPolicies(request.CurrentReplicas, rec.DesiredReplicas, sctx)
+	} else if rec.DesiredReplicas < request.CurrentReplicas {
+		rec.DesiredReplicas = ApplyScaleDownPolicies(request.CurrentReplicas, rec.DesiredReplicas, sctx)
+	}
+
+	// Step 8: Apply stabilization
 	rec.DesiredReplicas = a.applyStabilization(rec.DesiredReplicas, request, sctx)
 
 	// Determine scale direction and reason

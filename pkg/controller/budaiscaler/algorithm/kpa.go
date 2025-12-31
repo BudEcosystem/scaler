@@ -129,6 +129,13 @@ func (a *KPAAlgorithm) ComputeRecommendation(ctx context.Context, request Scalin
 	// Apply min/max constraints
 	rec.DesiredReplicas = a.applyConstraints(maxDesired, sctx.GetMinReplicas(), sctx.GetMaxReplicas())
 
+	// Apply scaling policies (limit rate of change)
+	if rec.DesiredReplicas > request.CurrentReplicas && !inPanicMode {
+		rec.DesiredReplicas = ApplyScaleUpPolicies(request.CurrentReplicas, rec.DesiredReplicas, sctx)
+	} else if rec.DesiredReplicas < request.CurrentReplicas {
+		rec.DesiredReplicas = ApplyScaleDownPolicies(request.CurrentReplicas, rec.DesiredReplicas, sctx)
+	}
+
 	// Apply stabilization
 	rec.DesiredReplicas = a.applyStabilization(rec.DesiredReplicas, request, sctx)
 

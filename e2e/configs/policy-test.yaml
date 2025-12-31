@@ -1,0 +1,45 @@
+---
+apiVersion: scaler.bud.studio/v1alpha1
+kind: BudAIScaler
+metadata:
+  name: policy-test-scaler
+  namespace: llm-test
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llm-inference-sim
+  minReplicas: 1
+  maxReplicas: 10
+  scalingStrategy: BudScaler
+  metricsSources:
+    - metricSourceType: external
+      targetMetric: "vllm:gpu_cache_usage_perc"
+      targetValue: "70"
+      endpoint: "http://mock-vllm-metrics.llm-test.svc.cluster.local:8000/json"
+  behavior:
+    scaleUp:
+      # Quick stabilization for testing
+      stabilizationWindowSeconds: 5
+      selectPolicy: Max
+      policies:
+        # Can add at most 2 pods per period
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+        # Can add at most 50% of current pods per period
+        - type: Percent
+          value: 50
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 10
+      selectPolicy: Min
+      policies:
+        # Can remove at most 1 pod per period
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+        # Can remove at most 20% of current pods per period
+        - type: Percent
+          value: 20
+          periodSeconds: 60

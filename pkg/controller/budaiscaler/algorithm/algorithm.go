@@ -82,6 +82,10 @@ type ScalingContextProvider interface {
 	GetStableWindowSeconds() int32
 	GetScaleUpStabilizationSeconds() int32
 	GetScaleDownStabilizationSeconds() int32
+	GetScaleUpPolicies() []scalerv1alpha1.ScalingPolicy
+	GetScaleDownPolicies() []scalerv1alpha1.ScalingPolicy
+	GetScaleUpSelectPolicy() scalerv1alpha1.ScalingPolicySelect
+	GetScaleDownSelectPolicy() scalerv1alpha1.ScalingPolicySelect
 }
 
 // ScalingRecommendation contains the result of a scaling decision.
@@ -166,4 +170,130 @@ func (f *DefaultAlgorithmFactory) Create(strategy scalerv1alpha1.ScalingStrategy
 // Register registers an algorithm for a strategy type.
 func (f *DefaultAlgorithmFactory) Register(strategy scalerv1alpha1.ScalingStrategyType, algo ScalingAlgorithm) {
 	f.algorithms[strategy] = algo
+}
+
+// ApplyScaleUpPolicies applies scale-up policies to limit the desired replica change.
+// It returns the maximum allowed replicas based on the configured policies.
+func ApplyScaleUpPolicies(currentReplicas, desiredReplicas int32, sctx ScalingContextProvider) int32 {
+	if desiredReplicas <= currentReplicas {
+		return desiredReplicas // Not scaling up
+	}
+
+	policies := sctx.GetScaleUpPolicies()
+	if len(policies) == 0 {
+		return desiredReplicas // No policies, allow full scale
+	}
+
+	selectPolicy := sctx.GetScaleUpSelectPolicy()
+	if selectPolicy == scalerv1alpha1.DisabledPolicySelect {
+		return currentReplicas // Scaling disabled
+	}
+
+	// Calculate allowed change for each policy
+	allowedChanges := make([]int32, len(policies))
+	for i, policy := range policies {
+		allowedChanges[i] = calculatePolicyLimit(currentReplicas, policy, true)
+	}
+
+	// Select based on policy
+	var maxAllowed int32
+	if selectPolicy == scalerv1alpha1.MinChangePolicySelect {
+		maxAllowed = minInt32Slice(allowedChanges)
+	} else {
+		// Default to Max for scale-up
+		maxAllowed = maxInt32Slice(allowedChanges)
+	}
+
+	maxReplicas := currentReplicas + maxAllowed
+	if desiredReplicas > maxReplicas {
+		return maxReplicas
+	}
+	return desiredReplicas
+}
+
+// ApplyScaleDownPolicies applies scale-down policies to limit the desired replica change.
+// It returns the minimum allowed replicas based on the configured policies.
+func ApplyScaleDownPolicies(currentReplicas, desiredReplicas int32, sctx ScalingContextProvider) int32 {
+	if desiredReplicas >= currentReplicas {
+		return desiredReplicas // Not scaling down
+	}
+
+	policies := sctx.GetScaleDownPolicies()
+	if len(policies) == 0 {
+		return desiredReplicas // No policies, allow full scale
+	}
+
+	selectPolicy := sctx.GetScaleDownSelectPolicy()
+	if selectPolicy == scalerv1alpha1.DisabledPolicySelect {
+		return currentReplicas // Scaling disabled
+	}
+
+	// Calculate allowed change for each policy
+	allowedChanges := make([]int32, len(policies))
+	for i, policy := range policies {
+		allowedChanges[i] = calculatePolicyLimit(currentReplicas, policy, false)
+	}
+
+	// Select based on policy
+	var maxAllowed int32
+	if selectPolicy == scalerv1alpha1.MaxChangePolicySelect {
+		maxAllowed = maxInt32Slice(allowedChanges)
+	} else {
+		// Default to Min for scale-down (most conservative)
+		maxAllowed = minInt32Slice(allowedChanges)
+	}
+
+	minReplicas := currentReplicas - maxAllowed
+	if minReplicas < 1 {
+		minReplicas = 1
+	}
+	if desiredReplicas < minReplicas {
+		return minReplicas
+	}
+	return desiredReplicas
+}
+
+// calculatePolicyLimit calculates the allowed change for a single policy.
+func calculatePolicyLimit(currentReplicas int32, policy scalerv1alpha1.ScalingPolicy, isScaleUp bool) int32 {
+	var limit int32
+
+	switch policy.Type {
+	case scalerv1alpha1.PodsScalingPolicy:
+		limit = policy.Value
+	case scalerv1alpha1.PercentScalingPolicy:
+		limit = int32(float64(currentReplicas) * float64(policy.Value) / 100.0)
+		if limit < 1 && policy.Value > 0 {
+			limit = 1 // Ensure at least 1 pod change if percentage > 0
+		}
+	}
+
+	return limit
+}
+
+// minInt32Slice returns the minimum value from a slice of int32.
+func minInt32Slice(values []int32) int32 {
+	if len(values) == 0 {
+		return 0
+	}
+	min := values[0]
+	for _, v := range values[1:] {
+		if v < min {
+			min = v
+		}
+	}
+	return min
+}
+
+// maxInt32Slice returns the maximum value from a slice of int32.
+func maxInt32Slice(values []int32) int32 {
+	if len(values) == 0 {
+		return 0
+	}
+	max := values[0]
+	for _, v := range values[1:] {
+		if v > max {
+			max = v
+		}
+	}
+	return max
 }

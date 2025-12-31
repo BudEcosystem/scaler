@@ -411,6 +411,50 @@ type ScalingBehavior struct {
 	ScaleDown *ScalingRules `json:"scaleDown,omitempty"`
 }
 
+// ScalingPolicyType defines the type of scaling policy.
+type ScalingPolicyType string
+
+const (
+	// PodsScalingPolicy scales by a fixed number of pods.
+	PodsScalingPolicy ScalingPolicyType = "Pods"
+
+	// PercentScalingPolicy scales by a percentage of current replicas.
+	PercentScalingPolicy ScalingPolicyType = "Percent"
+)
+
+// ScalingPolicySelect defines how to select which policy to use.
+type ScalingPolicySelect string
+
+const (
+	// MaxChangePolicySelect selects the policy that results in the highest change.
+	MaxChangePolicySelect ScalingPolicySelect = "Max"
+
+	// MinChangePolicySelect selects the policy that results in the lowest change.
+	MinChangePolicySelect ScalingPolicySelect = "Min"
+
+	// DisabledPolicySelect disables scaling in this direction.
+	DisabledPolicySelect ScalingPolicySelect = "Disabled"
+)
+
+// ScalingPolicy defines a single scaling policy.
+type ScalingPolicy struct {
+	// Type specifies the type of scaling policy.
+	// +kubebuilder:validation:Enum={Pods,Percent}
+	Type ScalingPolicyType `json:"type"`
+
+	// Value is the amount to scale.
+	// For Pods type: the number of pods to add/remove.
+	// For Percent type: the percentage of current replicas.
+	// +kubebuilder:validation:Minimum=0
+	Value int32 `json:"value"`
+
+	// PeriodSeconds is the time window for this policy.
+	// The policy allows at most Value pods/percent change within this period.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1800
+	PeriodSeconds int32 `json:"periodSeconds"`
+}
+
 // ScalingRules defines rules for scaling in a particular direction.
 type ScalingRules struct {
 	// StabilizationWindowSeconds is the number of seconds to look back
@@ -420,7 +464,17 @@ type ScalingRules struct {
 	// +kubebuilder:validation:Maximum=3600
 	StabilizationWindowSeconds *int32 `json:"stabilizationWindowSeconds,omitempty"`
 
-	// MaxScaleRate is the maximum scaling rate.
+	// SelectPolicy determines which policy to use when multiple policies apply.
+	// Defaults to Max for scale-up and Min for scale-down.
+	// +optional
+	// +kubebuilder:validation:Enum={Max,Min,Disabled}
+	SelectPolicy *ScalingPolicySelect `json:"selectPolicy,omitempty"`
+
+	// Policies is a list of scaling policies.
+	// +optional
+	Policies []ScalingPolicy `json:"policies,omitempty"`
+
+	// MaxScaleRate is the maximum scaling rate (deprecated, use Policies instead).
 	// For example, 2.0 means the replica count can double in one step.
 	// +optional
 	MaxScaleRate *string `json:"maxScaleRate,omitempty"`
